@@ -34,7 +34,7 @@ export default function HomePage() {
           className="absolute inset-0 -z-10 w-full h-full object-cover hidden md:block"
           style={{ objectPosition: "left 35%" }}
         />
-        <div className="container-page relative min-h-[340px] md:min-h-[420px] py-8 md:py-16 flex items-end md:items-center">
+        <div className="container-page relative min-h-[340px] md:min-h-[520px] py-8 md:py-20 flex items-end md:items-center">
           <blockquote className="md:ml-auto md:max-w-xl text-white">
             {/* box-decoration-clone gives each wrapped line its own tight highlight, instead of one chunky box */}
             <p className="font-display text-2xl md:text-3xl lg:text-4xl leading-[1.6] italic">
