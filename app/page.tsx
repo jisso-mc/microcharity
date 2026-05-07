@@ -16,22 +16,33 @@ export default function HomePage() {
     <>
       {/* BANNER — Mother Teresa portrait with the quote overlaid */}
       <section className="relative isolate overflow-hidden bg-[#3b6e6e]">
+        {/* Mobile crop: anchor face to upper-right of frame */}
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src="/banners/mother-teresa.jpg"
           alt=""
           aria-hidden="true"
-          className="absolute inset-0 -z-10 w-full h-full object-cover"
+          className="absolute inset-0 -z-10 w-full h-full object-cover md:hidden"
+          style={{ objectPosition: "30% 25%" }}
+        />
+        {/* Desktop crop: subject anchored on the left */}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src="/banners/mother-teresa.jpg"
+          alt=""
+          aria-hidden="true"
+          className="absolute inset-0 -z-10 w-full h-full object-cover hidden md:block"
           style={{ objectPosition: "left 35%" }}
         />
-        <div className="absolute inset-0 -z-10 bg-gradient-to-r from-black/5 via-black/10 to-black/40" />
+        {/* Mobile: bottom-up scrim. Desktop: right-side scrim where the quote sits. */}
+        <div className="absolute inset-0 -z-10 bg-gradient-to-t from-black/70 via-black/30 to-transparent md:bg-gradient-to-r md:from-black/0 md:via-black/10 md:to-black/45" />
 
-        <div className="container-page relative min-h-[420px] md:min-h-[520px] py-16 md:py-20 flex items-center">
+        <div className="container-page relative min-h-[440px] md:min-h-[520px] py-10 md:py-20 flex items-end md:items-center">
           <blockquote className="md:ml-auto md:max-w-xl text-white">
-            <p className="font-display text-2xl md:text-3xl lg:text-4xl leading-snug italic">
+            <p className="font-display text-2xl md:text-3xl lg:text-4xl leading-snug italic" style={{ textShadow: "0 1px 8px rgba(0,0,0,0.45)" }}>
               &ldquo;If you can&rsquo;t feed a hundred people, then feed just one.&rdquo;
             </p>
-            <footer className="not-italic text-sm md:text-base text-white/80 mt-4 font-sans">
+            <footer className="not-italic text-sm md:text-base text-white/90 mt-3 md:mt-4 font-sans" style={{ textShadow: "0 1px 6px rgba(0,0,0,0.45)" }}>
               — Mother Teresa
             </footer>
           </blockquote>
