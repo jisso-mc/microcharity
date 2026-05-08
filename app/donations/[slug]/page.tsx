@@ -76,25 +76,40 @@ export default async function CausePage({ params }: { params: Promise<{ slug: st
             </div>
           )}
 
-          {campaign.updates.length > 0 ? (
-            <div className="space-y-8">
-              {campaign.updates.map((u, i) => (
-                <article key={i} className="border-l-2 border-[var(--color-line)] pl-5 md:pl-7 relative">
-                  <span className="absolute -left-[7px] top-1.5 w-3 h-3 rounded-full bg-accent-600 border-2 border-white"></span>
-                  {u.caption && (
-                    <p className="text-xs font-semibold text-accent-600 uppercase tracking-wider mb-2">{u.caption}</p>
-                  )}
-                  <div className="prose-mc max-w-none">
-                    {u.body.split(/\r?\n\r?\n/).map(p => p.trim()).filter(Boolean).map((p, j) => <p key={j}>{p}</p>)}
-                  </div>
-                </article>
-              ))}
-            </div>
-          ) : campaign.summary ? (
-            <div className="prose-mc max-w-none">
-              {campaign.summary.split(/\r?\n\r?\n/).map(p => p.trim()).filter(Boolean).map((p, i) => <p key={i}>{p}</p>)}
-            </div>
-          ) : null}
+          {/*
+            Show timeline entries from EVERY campaign of this beneficiary in one stream — so a
+            newly-published follow-up cause automatically inherits the history of previous campaigns.
+            Campaigns are already ordered chronologically (oldest first) in the data layer; updates
+            within each campaign are in sortOrder.
+          */}
+          {(() => {
+            const allUpdates = beneficiary.campaigns.flatMap(c => c.updates);
+            if (allUpdates.length > 0) {
+              return (
+                <div className="space-y-8">
+                  {allUpdates.map((u, i) => (
+                    <article key={i} className="border-l-2 border-[var(--color-line)] pl-5 md:pl-7 relative">
+                      <span className="absolute -left-[7px] top-1.5 w-3 h-3 rounded-full bg-accent-600 border-2 border-white"></span>
+                      {u.caption && (
+                        <p className="text-xs font-semibold text-accent-600 uppercase tracking-wider mb-2">{u.caption}</p>
+                      )}
+                      <div className="prose-mc max-w-none">
+                        {u.body.split(/\r?\n\r?\n/).map(p => p.trim()).filter(Boolean).map((p, j) => <p key={j}>{p}</p>)}
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              );
+            }
+            if (campaign.summary) {
+              return (
+                <div className="prose-mc max-w-none">
+                  {campaign.summary.split(/\r?\n\r?\n/).map(p => p.trim()).filter(Boolean).map((p, i) => <p key={i}>{p}</p>)}
+                </div>
+              );
+            }
+            return null;
+          })()}
         </div>
 
         <aside className="lg:col-span-5 lg:pl-4">
