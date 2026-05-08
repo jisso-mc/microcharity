@@ -39,65 +39,57 @@ export default async function CausesAdminPage() {
         </Link>
       </div>
 
-      <div className="rounded-2xl bg-white border border-[var(--color-line)] overflow-hidden">
-        <table className="w-full text-sm">
+      <div className="rounded-2xl bg-white border border-[var(--color-line)] overflow-x-auto">
+        <table className="w-full text-sm min-w-[760px]">
           <thead className="bg-[var(--color-soft)] text-xs uppercase tracking-wider text-muted">
             <tr>
               <th className="text-left font-semibold px-4 py-3">Title</th>
-              <th className="text-left font-semibold px-4 py-3">Status</th>
-              <th className="text-right font-semibold px-4 py-3">Raised</th>
-              <th className="text-right font-semibold px-4 py-3">Goal</th>
-              <th className="text-left font-semibold px-4 py-3">Slug</th>
-              <th className="text-right font-semibold px-4 py-3">Actions</th>
+              <th className="text-left font-semibold px-3 py-3 w-[7rem]">Status</th>
+              <th className="text-right font-semibold px-3 py-3 w-[8rem]">Raised / Goal</th>
+              <th className="text-right font-semibold px-4 py-3 w-[14rem]">Actions</th>
             </tr>
           </thead>
           <tbody>
             {causes.map(c => {
               const pct = c.goalAmount > 0 ? Math.min(100, Math.round((c.raisedAmount / c.goalAmount) * 100)) : 0;
               return (
-                <tr key={c.id} className="border-t border-[var(--color-line)] hover:bg-[var(--color-soft)]/50">
-                  <td className="px-4 py-3 text-ink font-medium max-w-[28rem]">
-                    <Link href={`/admin/causes/${c.slug}`} className="block truncate hover:text-accent-600">{c.title}</Link>
+                <tr key={c.id} className="border-t border-[var(--color-line)] hover:bg-[var(--color-soft)]/50 align-top">
+                  <td className="px-4 py-3 max-w-[24rem]">
+                    <Link href={`/admin/causes/${c.slug}`} className="block text-ink font-medium truncate hover:text-accent-600">
+                      {c.title}
+                    </Link>
+                    <span className="block text-xs text-muted font-mono truncate mt-0.5">{c.slug}</span>
                   </td>
-                  <td className="px-4 py-3">
+                  <td className="px-3 py-3">
                     <span className={`text-[11px] uppercase tracking-wider font-semibold px-2 py-1 rounded ${STATUS_CLS[c.status] ?? ""}`}>
                       {STATUS_LABEL[c.status] ?? c.status}
                     </span>
                   </td>
-                  <td className="px-4 py-3 text-right tabular-nums">{inrShort(c.raisedAmount)}</td>
-                  <td className="px-4 py-3 text-right tabular-nums text-muted">{inrShort(c.goalAmount)} <span className="text-xs ml-1">({pct}%)</span></td>
-                  <td className="px-4 py-3 text-xs text-muted font-mono max-w-[16rem] truncate">{c.slug}</td>
+                  <td className="px-3 py-3 text-right tabular-nums whitespace-nowrap">
+                    <span className="block text-ink">{inrShort(c.raisedAmount)}</span>
+                    <span className="block text-xs text-muted">of {inrShort(c.goalAmount)} · {pct}%</span>
+                  </td>
                   <td className="px-4 py-3 text-right whitespace-nowrap">
-                    <div className="inline-flex items-center gap-3">
+                    <div className="inline-flex items-center gap-x-3 gap-y-1 flex-wrap justify-end">
                       {c.status === "PUBLISHED" && (
                         <form action={setCauseStatusAction}>
                           <input type="hidden" name="id" value={c.id} />
                           <input type="hidden" name="status" value="CLOSED" />
-                          <button
-                            type="submit"
-                            className="text-xs font-semibold text-accent-600 hover:text-accent-700"
-                            title={`Close this cause${c.raisedAmount < c.goalAmount ? " before the goal is reached" : ""}`}
-                          >
-                            Close
-                          </button>
+                          <button type="submit" className="text-xs font-semibold text-accent-600 hover:text-accent-700">Close</button>
                         </form>
                       )}
                       {c.status === "CLOSED" && (
                         <form action={setCauseStatusAction}>
                           <input type="hidden" name="id" value={c.id} />
                           <input type="hidden" name="status" value="PUBLISHED" />
-                          <button type="submit" className="text-xs font-semibold text-muted hover:text-ink" title="Re-open this cause">
-                            Re-open
-                          </button>
+                          <button type="submit" className="text-xs font-semibold text-muted hover:text-ink">Re-open</button>
                         </form>
                       )}
                       {c.status === "DRAFT" && (
                         <form action={setCauseStatusAction}>
                           <input type="hidden" name="id" value={c.id} />
                           <input type="hidden" name="status" value="PUBLISHED" />
-                          <button type="submit" className="text-xs font-semibold text-accent-600 hover:text-accent-700">
-                            Publish
-                          </button>
+                          <button type="submit" className="text-xs font-semibold text-accent-600 hover:text-accent-700">Publish</button>
                         </form>
                       )}
                       <Link href={`/admin/causes/new?from=${encodeURIComponent(c.slug)}`} className="text-xs font-semibold text-ink hover:text-accent-600" title="Create a follow-up campaign with these details pre-filled">
