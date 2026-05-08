@@ -3,6 +3,7 @@ import Link from "next/link";
 import { allCampaigns, findCampaign } from "@/lib/data/causes";
 import { inrShort } from "@/lib/format";
 import DonateForm from "./DonateForm";
+import ShareButtons from "@/components/ShareButtons";
 
 export function generateStaticParams() {
   return allCampaigns.map(c => ({ slug: c.slug }));
@@ -12,7 +13,27 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
   const { slug } = await params;
   const found = findCampaign(slug);
   if (!found) return { title: "Cause not found" };
-  return { title: found.campaign.title, description: found.campaign.summary };
+  const { campaign } = found;
+  const path = `/donations/${slug}`;
+  const images = campaign.image ? [campaign.image] : undefined;
+  return {
+    title: campaign.title,
+    description: campaign.summary,
+    alternates: { canonical: path },
+    openGraph: {
+      title: campaign.title,
+      description: campaign.summary,
+      url: path,
+      type: "article",
+      images,
+    },
+    twitter: {
+      card: "summary_large_image",
+      title: campaign.title,
+      description: campaign.summary,
+      images,
+    },
+  };
 }
 
 export default async function CausePage({ params }: { params: Promise<{ slug: string }> }) {
@@ -98,6 +119,15 @@ export default async function CausePage({ params }: { params: Promise<{ slug: st
                   <p className="text-muted mt-1">Thank you to everyone who contributed.</p>
                 </div>
               )}
+            </div>
+
+            {/* Share — pulls OG image + description from page metadata when shared */}
+            <div className="rounded-2xl border border-[var(--color-line)] bg-white p-6">
+              <ShareButtons
+                path={`/donations/${campaign.slug}`}
+                title={campaign.title}
+                text={campaign.summary}
+              />
             </div>
 
             {other.length > 0 && (
