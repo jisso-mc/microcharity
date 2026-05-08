@@ -4,6 +4,11 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
 import { site } from "@/lib/data/site";
+import SearchDialog from "./SearchDialog";
+
+function openSearch() {
+  document.dispatchEvent(new CustomEvent("mc:search-open"));
+}
 
 export default function Header() {
   const pathname = usePathname();
@@ -30,19 +35,35 @@ export default function Header() {
               </Link>
             );
           })}
+          <button
+            onClick={openSearch}
+            aria-label="Search causes"
+            className="ml-2 w-9 h-9 rounded-full border border-[var(--color-line)] hover:border-accent-600 hover:text-accent-600 flex items-center justify-center text-ink transition"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+          </button>
         </nav>
 
-        <button
-          className="lg:hidden p-2 -mr-2"
-          aria-label="Open menu"
-          onClick={() => setOpen((v) => !v)}
-        >
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <line x1="4" y1="6" x2="20" y2="6" />
-            <line x1="4" y1="12" x2="20" y2="12" />
-            <line x1="4" y1="18" x2="20" y2="18" />
-          </svg>
-        </button>
+        <div className="flex items-center gap-1 lg:hidden">
+          <button
+            onClick={openSearch}
+            aria-label="Search causes"
+            className="p-2 text-ink hover:text-accent-600"
+          >
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+          </button>
+          <button
+            className="p-2 -mr-2"
+            aria-label="Open menu"
+            onClick={() => setOpen((v) => !v)}
+          >
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="4" y1="6" x2="20" y2="6" />
+              <line x1="4" y1="12" x2="20" y2="12" />
+              <line x1="4" y1="18" x2="20" y2="18" />
+            </svg>
+          </button>
+        </div>
       </div>
 
       {open && (
@@ -56,6 +77,8 @@ export default function Header() {
           </nav>
         </div>
       )}
+
+      <SearchDialog />
     </header>
   );
 }
