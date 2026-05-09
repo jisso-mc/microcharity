@@ -37,16 +37,23 @@ export async function POST(req: Request) {
       paymentDate: parsed.paymentDate,
     });
 
-    // Don't block the response on email delivery — log & continue.
-    sendDonationAck({
-      donorName: parsed.name,
-      donorEmail: parsed.email,
-      causeTitle: cause.title,
-      donationDate: donation.createdAt,
-      amount: parsed.amount,
-      paymentMethod: "Offline Donation",
-      paymentId: donation.id.slice(-8).toUpperCase(),
-    }).catch((e) => console.error("[donate/offline] ack email failed", e));
+    // Await the ack email — fire-and-forget on Vercel's serverless runtime gets
+    // killed when the function response returns, so the email never sends. We catch
+    // and log so a transient SMTP failure still returns success to the donor (their
+    // donation is already saved; admin can resend if needed).
+    try {
+      await sendDonationAck({
+        donorName: parsed.name,
+        donorEmail: parsed.email,
+        causeTitle: cause.title,
+        donationDate: donation.createdAt,
+        amount: parsed.amount,
+        paymentMethod: "Offline Donation",
+        paymentId: donation.id.slice(-8).toUpperCase(),
+      });
+    } catch (e) {
+      console.error("[donate/offline] ack email failed", e);
+    }
 
     return NextResponse.json({ ok: true, donationId: donation.id });
   } catch (e) {

@@ -35,15 +35,21 @@ export async function POST(req: Request) {
       type: "QR",
     });
 
-    sendDonationAck({
-      donorName: parsed.name,
-      donorEmail: parsed.email,
-      causeTitle: cause.title,
-      donationDate: donation.createdAt,
-      amount: parsed.amount,
-      paymentMethod: "UPI / QR Code",
-      paymentId: donation.id.slice(-8).toUpperCase(),
-    }).catch((e) => console.error("[donate/qr] ack email failed", e));
+    // Await the ack email — fire-and-forget gets killed when the serverless function
+    // response returns. Catch+log so a transient SMTP failure still returns success.
+    try {
+      await sendDonationAck({
+        donorName: parsed.name,
+        donorEmail: parsed.email,
+        causeTitle: cause.title,
+        donationDate: donation.createdAt,
+        amount: parsed.amount,
+        paymentMethod: "UPI / QR Code",
+        paymentId: donation.id.slice(-8).toUpperCase(),
+      });
+    } catch (e) {
+      console.error("[donate/qr] ack email failed", e);
+    }
 
     return NextResponse.json({ ok: true, donationId: donation.id });
   } catch (e) {
