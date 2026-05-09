@@ -9,16 +9,14 @@ export const dynamic = "force-dynamic";
 
 // Donor-facing UPI / QR code donation submission.
 // Donor pays out-of-band via UPI (scanning the QR shown on the donation page), then
-// submits this form with their UTR / txn id. We persist a PENDING donation and email
-// an immediate acknowledgment. 80G receipt waits for admin verification.
+// submits the form with their contact details. We persist a PENDING donation and email
+// an immediate acknowledgment. Admin reconciles the bank statement against the donor's
+// name / amount / date to approve. 80G receipt waits for that approval.
 export async function POST(req: Request) {
   try {
     const data = await req.json().catch(() => ({} as Record<string, unknown>));
     const parsed = parseDonorPayload(data);
     if ("error" in parsed) return NextResponse.json({ error: parsed.error }, { status: 400 });
-
-    const utr = String(data.utr ?? "").trim();
-    if (!utr) return NextResponse.json({ error: "Please enter the UPI reference / transaction ID after paying." }, { status: 400 });
 
     const cause = await prisma.cause.findUnique({
       where: { slug: parsed.slug },
@@ -35,8 +33,6 @@ export async function POST(req: Request) {
       donorAddress: parsed.address,
       amount: parsed.amount,
       type: "QR",
-      utr,
-      paymentDate: parsed.paymentDate,
     });
 
     sendDonationAck({
@@ -46,7 +42,7 @@ export async function POST(req: Request) {
       donationDate: donation.createdAt,
       amount: parsed.amount,
       paymentMethod: "UPI / QR Code",
-      paymentId: utr,
+      paymentId: donation.id.slice(-8).toUpperCase(),
     }).catch((e) => console.error("[donate/qr] ack email failed", e));
 
     return NextResponse.json({ ok: true, donationId: donation.id });

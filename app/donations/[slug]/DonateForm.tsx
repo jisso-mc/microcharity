@@ -55,9 +55,7 @@ export default function DonateForm({ slug }: { slug: string }) {
         await runOffline(donor);
         setDone({ amount: donor.amount, name: donor.name, method });
       } else {
-        const utr = String(form.get("utr") ?? "").trim();
-        const paymentDate = String(form.get("paymentDate") ?? "").trim();
-        await runQr({ ...donor, utr, paymentDate });
+        await runQr(donor);
         setDone({ amount: donor.amount, name: donor.name, method });
       }
     } catch (err) {
@@ -124,8 +122,7 @@ export default function DonateForm({ slug }: { slug: string }) {
     if (!res.ok) throw new Error(j.error ?? "Could not submit.");
   }
 
-  async function runQr(d: ReturnType<typeof readDonor> & { utr: string; paymentDate: string }) {
-    if (!d.utr) throw new Error("Please enter the UPI reference / transaction ID after paying.");
+  async function runQr(d: ReturnType<typeof readDonor>) {
     const res = await fetch("/api/donate/qr", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -204,14 +201,10 @@ export default function DonateForm({ slug }: { slug: string }) {
         {method === "qr" && (
           <div className="rounded-lg border border-[var(--color-line)] bg-[var(--color-soft)] p-4 space-y-3">
             <p className="text-sm text-ink leading-relaxed">
-              Scan the QR code below with Google Pay, PhonePe, Paytm, Amazon Pay, or any bank&apos;s UPI app, then enter the UPI reference / transaction ID below.
+              Scan the QR code below with Google Pay, PhonePe, Paytm, Amazon Pay, or any bank&apos;s UPI app, then submit your details below so we can match the payment.
             </p>
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src="/qr-code.jpg" alt="UPI QR code for MicroCharity" className="block mx-auto w-48 h-48 object-contain rounded-lg bg-white border border-[var(--color-line)]" />
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <Field label="UPI Reference / Txn ID" name="utr" required />
-              <Field label="Payment Date" name="paymentDate" type="date" />
-            </div>
           </div>
         )}
 
