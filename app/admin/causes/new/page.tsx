@@ -9,38 +9,40 @@ export default async function NewCausePage({ searchParams }: { searchParams: Pro
   const sp = await searchParams;
   const fromSlug = sp.from?.trim();
 
-  let template:
+  let predecessor:
     | {
-        title: string;
         slug: string;
-        summary: string;
-        story: string;
-        image: string;
-        goal: number;
+        title: string;
         beneficiaryKey: string;
         category: string;
         location: string;
-        sourceTitle: string;
+        goal: number;
+        image: string;
+        // Full timeline of the predecessor — copied verbatim onto the new cause on submit.
+        updates: { caption: string; body: string; postedAt: string; sortOrder: number }[];
       }
     | undefined;
 
   if (fromSlug) {
     const src = await prisma.cause.findUnique({
       where: { slug: fromSlug },
-      include: { updates: { orderBy: { sortOrder: "asc" }, take: 1 } },
+      include: { updates: { orderBy: { sortOrder: "asc" } } },
     });
     if (src) {
-      template = {
+      predecessor = {
+        slug: src.slug,
         title: src.title,
-        slug: "", // force the user to pick a new slug
-        summary: src.summary ?? "",
-        story: src.updates[0]?.body ?? "",
-        image: src.featuredImage ?? "",
-        goal: src.goalAmount,
         beneficiaryKey: src.beneficiaryKey ?? "",
         category: src.category ?? "",
         location: src.location ?? "",
-        sourceTitle: src.title,
+        goal: src.goalAmount,
+        image: src.featuredImage ?? "",
+        updates: src.updates.map((u) => ({
+          caption: u.caption ?? "",
+          body: u.body,
+          postedAt: u.postedAt.toISOString(),
+          sortOrder: u.sortOrder,
+        })),
       };
     }
   }
@@ -48,15 +50,15 @@ export default async function NewCausePage({ searchParams }: { searchParams: Pro
   return (
     <div className="max-w-3xl">
       <Link href="/admin/causes" className="text-sm text-muted hover:text-ink mb-4 inline-block">← Back to causes</Link>
-      <h1 className="font-display text-3xl text-ink mb-2">{template ? "Duplicate cause" : "New cause"}</h1>
+      <h1 className="font-display text-3xl text-ink mb-2">{predecessor ? "New cause (continuing campaign)" : "New cause"}</h1>
       <p className="text-sm text-muted mb-6">
-        {template
-          ? <>Pre-filled from <strong className="text-ink">{template.sourceTitle}</strong>. Update the title, give it a fresh URL slug, set the new goal — then publish.</>
-          : <>Create a new donation page. You can save it as a draft first and publish when ready.</>}
+        {predecessor
+          ? <>Continuing <strong className="text-ink">{predecessor.title}</strong>. Its full timeline ({predecessor.updates.length} entries) will be copied onto this new cause as read-only history. Below, just enter the new entry&apos;s details.</>
+          : <>Search for a previous cause to continue a campaign for the same beneficiary, or fill in the form below to start a brand-new cause.</>}
       </p>
 
       <div className="rounded-2xl bg-white border border-[var(--color-line)] p-6 md:p-8">
-        <CauseForm template={template} />
+        <CauseForm predecessor={predecessor} />
       </div>
     </div>
   );

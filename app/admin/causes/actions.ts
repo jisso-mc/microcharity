@@ -114,6 +114,7 @@ export async function createCauseAction(_prev: CauseFormState, formData: FormDat
   const statusRaw = String(formData.get("status") ?? "DRAFT") as CauseStatus;
   const dateRaw = String(formData.get("date") ?? "").trim();
   const location = String(formData.get("location") ?? "").trim();
+  const fromSlug = String(formData.get("fromSlug") ?? "").trim(); // predecessor cause we're continuing from
   const date = dateRaw ? new Date(dateRaw) : new Date();
   if (dateRaw && Number.isNaN(date.getTime())) return { error: "Invalid date." };
 
@@ -131,7 +132,26 @@ export async function createCauseAction(_prev: CauseFormState, formData: FormDat
   const clash = await prisma.cause.findUnique({ where: { slug }, select: { id: true } });
   if (clash) return { error: `A cause with slug "${slug}" already exists. Pick a different one.` };
 
-  const finalKey = beneficiaryKey || deriveBeneficiaryKey(slug);
+  // If continuing from a predecessor, load its full timeline now so we can copy it
+  // onto the new cause inside the transaction below.
+  let predecessor: { id: string; beneficiaryKey: string | null; updates: { caption: string | null; body: string; postedAt: Date }[] } | null = null;
+  if (fromSlug) {
+    predecessor = await prisma.cause.findUnique({
+      where: { slug: fromSlug },
+      select: {
+        id: true,
+        beneficiaryKey: true,
+        updates: {
+          orderBy: { sortOrder: "asc" },
+          select: { caption: true, body: true, postedAt: true },
+        },
+      },
+    });
+    if (!predecessor) return { error: `Predecessor cause "${fromSlug}" not found.` };
+  }
+
+  // Beneficiary key: predecessor wins, then explicit form value, then derived from slug.
+  const finalKey = predecessor?.beneficiaryKey || beneficiaryKey || deriveBeneficiaryKey(slug);
 
   const created = await prisma.$transaction(async (tx) => {
     const mcId = await nextMcId(tx, date);
@@ -140,6 +160,28 @@ export async function createCauseAction(_prev: CauseFormState, formData: FormDat
       heading: location || undefined,
       mcId,
     });
+
+    // Build the full updates payload: predecessor's whole timeline first (sortOrder 0..N-1,
+    // mcId set to null because CauseUpdate.mcId is unique — only the original holders own it,
+    // the MCID still appears in the caption text), then this cause's own first entry on top.
+    const copies = (predecessor?.updates ?? []).map((u, i) => ({
+      caption: u.caption,
+      body: u.body,
+      sortOrder: i,
+      postedAt: u.postedAt,
+      mcId: null,
+    }));
+    const newEntrySortOrder = copies.length;
+    const newEntry = story
+      ? [{
+          caption: initialCaption,
+          body: story,
+          sortOrder: newEntrySortOrder,
+          postedAt: date,
+          mcId, // same MCID as the cause itself
+        }]
+      : [];
+    const allUpdates = [...copies, ...newEntry];
 
     return tx.cause.create({
       data: {
@@ -157,20 +199,7 @@ export async function createCauseAction(_prev: CauseFormState, formData: FormDat
         startDate: date,
         mcId,
         createdById: user.userId,
-        // Initial timeline entry: caption uses the same MCID as the cause, body is the story (if provided).
-        ...(story
-          ? {
-              updates: {
-                create: [{
-                  caption: initialCaption,
-                  body: story,
-                  sortOrder: 0,
-                  postedAt: date,
-                  mcId, // same MCID as the cause itself for the first entry
-                }],
-              },
-            }
-          : {}),
+        ...(allUpdates.length > 0 ? { updates: { create: allUpdates } } : {}),
       },
     });
   });
