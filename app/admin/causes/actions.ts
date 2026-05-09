@@ -13,6 +13,14 @@ async function requireAdmin() {
   return user;
 }
 
+// Returns the session userId only if a User row with that id actually exists in this DB.
+// Guards against stale JWTs from a previous environment / reseeded prod DB — otherwise
+// passing a dangling id to createdById violates Cause_createdById_fkey at insert time.
+async function safeCreatorId(userId: string): Promise<string | null> {
+  const u = await prisma.user.findUnique({ where: { id: userId }, select: { id: true } });
+  return u?.id ?? null;
+}
+
 export type CauseFormState = { error?: string; ok?: true };
 
 function slugify(s: string): string {
@@ -153,6 +161,8 @@ export async function createCauseAction(_prev: CauseFormState, formData: FormDat
   // Beneficiary key: predecessor wins, then explicit form value, then derived from slug.
   const finalKey = predecessor?.beneficiaryKey || beneficiaryKey || deriveBeneficiaryKey(slug);
 
+  const creatorId = await safeCreatorId(user.userId);
+
   const created = await prisma.$transaction(async (tx) => {
     const mcId = await nextMcId(tx, date);
     const initialCaption = composeCaption({
@@ -198,7 +208,7 @@ export async function createCauseAction(_prev: CauseFormState, formData: FormDat
         location: location || null,
         startDate: date,
         mcId,
-        createdById: user.userId,
+        createdById: creatorId,
         ...(allUpdates.length > 0 ? { updates: { create: allUpdates } } : {}),
       },
     });
