@@ -214,8 +214,9 @@ model User {
   inviteToken     String?    @unique
   inviteExpiresAt DateTime?
 
-  causes          Cause[]
-  approvals       Donation[]
+  causes              Cause[]
+  approvals           Donation[]
+  reviewedApplications CauseApplication[]
 
   createdAt       DateTime   @default(now())
 }
@@ -234,6 +235,59 @@ model AuditLog {
 
   @@index([userId])
   @@index([entityType, entityId])
+}
+
+// ---------- Cause applications (online intake forms) ----------
+
+enum ApplicationFormType {
+  EDUCATIONAL
+  MEDICAL
+  INDIVIDUAL
+  ORGANIZATIONAL
+}
+
+enum ApplicationStatus {
+  SUBMITTED
+  UNDER_REVIEW
+  APPROVED
+  REJECTED
+}
+
+model CauseApplication {
+  id            String              @id @default(cuid())
+  // Auto-generated, e.g. "MC/EDU/26-27/001". Unique across all FYs.
+  applicationNo String              @unique
+  formType      ApplicationFormType
+  status        ApplicationStatus   @default(SUBMITTED)
+
+  // Mirrored out of `data` so list / search / sort don't need to dig into JSON.
+  fullName      String
+  phone         String
+  email         String?
+
+  // The full submission payload (per-type shape). Validated at submission time;
+  // the column itself is opaque so we can evolve form templates without migrations.
+  data          Json
+
+  // Filename + size + mime + which slot each attachment came from. The actual file
+  // bytes are NEVER persisted — they're forwarded once to info@microcharity.com via
+  // email and discarded. This is the metadata so admins know what was sent.
+  attachmentMeta Json?
+
+  adminNotes    String?             @db.Text
+  reviewedAt    DateTime?
+  reviewedById  String?
+  reviewedBy    User?               @relation(fields: [reviewedById], references: [id])
+
+  // Diagnostics for the e-signature acknowledgement.
+  submittedFromIp String?
+
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+
+  @@index([formType])
+  @@index([status])
+  @@index([createdAt])
 }
 
 // ---------- Unsubscribe list ----------
