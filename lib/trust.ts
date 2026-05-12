@@ -3,8 +3,8 @@
 // Edit here if any of these change; they're stamped onto every receipt PDF.
 
 export const TRUST = {
-  name: "MicroCharity Trust",
-  legalName: "MicroCharity Trust ®",
+  name: "Microchairty Trust",
+  legalName: "Microchairty Trust",
   pan: "AADTM8753H",
   exemption80G:
     "DIT(E)BLR/80G/K-70/AATFM6359B/ITO(E)-2/Vol 2014-2015",
@@ -12,13 +12,22 @@ export const TRUST = {
   trustRegistration: "KEN-4-00113-2010-11",
   registrationSince: "15-July-2014",
   address: {
-    line1: "112 West Village, Kengeri",
-    line2: "Bangalore - 560060",
+    // Single-line address used on the receipt header.
+    line1: "Bangalore Karnataka 560060 India",
+    // Legacy two-line address kept for emails / older surfaces.
+    legacyLine1: "112 West Village, Kengeri",
+    legacyLine2: "Bangalore - 560060",
   },
-  website: "www.microcharity.com",
-  email: "info@microcharity.com",
+  website: "https://www.microcharity.com",
+  email: "Info@microcharity.com",
+  financeEmail: "finance@microcharity.com",
   exemptionOrderUrl:
     "http://www.microcharity.com/public/docs/MicroCharityTrust80GExemptionOrder.pdf",
+  // Authorized signatory shown on the receipt.
+  signatory: {
+    name: "Melvin Mathews",
+    title: "Authorized Signature",
+  },
 };
 
 // NEFT / IMPS / RTGS bank details shown to donors who choose Offline mode.

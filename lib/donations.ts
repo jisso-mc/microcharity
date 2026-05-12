@@ -7,7 +7,7 @@ import { prisma } from "./prisma";
 import type { DonationType } from "@prisma/client";
 import { buildReceiptPdf, nextReceiptNumber } from "./receipt";
 import { sendDonationReceipt80G } from "./email";
-import { encryptPii } from "./crypto";
+import { encryptPii, decryptPiiSafe } from "./crypto";
 import { retryOnUniqueViolation } from "./retry";
 
 export type CreateManualInput = {
@@ -256,7 +256,12 @@ export async function issueReceiptForDonation(donationId: string): Promise<void>
   try {
     const d = await prisma.donation.findUnique({
       where: { id: donationId },
-      include: { cause: { select: { title: true, mcId: true } } },
+      include: {
+        cause: { select: { title: true, mcId: true } },
+        // Pull the donor row alongside so we can fall back to Donor.panEncrypted
+        // if this particular donation didn't capture a PAN.
+        donor: { select: { panEncrypted: true } },
+      },
     });
     if (!d) return;
     if (d.status !== "APPROVED") return;
@@ -279,19 +284,26 @@ export async function issueReceiptForDonation(donationId: string): Promise<void>
       }));
     }
 
+    // Payment-mode labels matched to the new Finance template.
     const paymentMode =
-      d.type === "ONLINE" ? "Razorpay" :
-      d.type === "QR" ? "UPI" :
-      d.type === "OFFLINE" ? "NEFT / Bank Transfer" :
-      "Manual";
+      d.type === "ONLINE"  ? "Online - Razorpay" :
+      d.type === "QR"      ? "UPI" :
+      d.type === "OFFLINE" ? "Bank Transfer - NEFT / IMPS / RTGS" :
+      "Manual entry";
 
     const paymentDate = d.paymentDate ?? d.approvedAt ?? d.createdAt;
+
+    // PAN — decrypt either the per-donation field or the donor profile, whichever
+    // is set. Stored ciphertext is "v1:..." (AES-256-GCM via lib/crypto.ts).
+    const panCiphertext = d.panEncrypted ?? d.donor?.panEncrypted ?? null;
+    const donorPan = decryptPiiSafe(panCiphertext) || null;
 
     const pdf = await buildReceiptPdf({
       receiptNumber: receiptRow.receiptNumber,
       receiptDate: new Date(),
       donorName: d.donorNameSnapshot,
-      donorAddress: d.addressSnapshot ?? null,
+      donorPan,
+      causeTitle: d.cause.title,
       causeMcId: d.cause.mcId ?? null,
       amount: d.amount,
       paymentMode,
