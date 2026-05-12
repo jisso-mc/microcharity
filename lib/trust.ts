@@ -3,8 +3,8 @@
 // Edit here if any of these change; they're stamped onto every receipt PDF.
 
 export const TRUST = {
-  name: "Microchairty Trust",
-  legalName: "Microchairty Trust",
+  name: "MicroCharity Trust",
+  legalName: "MicroCharity Trust",
   pan: "AADTM8753H",
   exemption80G:
     "DIT(E)BLR/80G/K-70/AATFM6359B/ITO(E)-2/Vol 2014-2015",
