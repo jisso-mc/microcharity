@@ -90,7 +90,14 @@ export async function approveDonationAction(formData: FormData) {
     }
   }
 
-  const before = await prisma.donation.findUnique({ where: { id }, select: { amount: true } });
+  // Grab the cause slug along with the donation amount up-front so we can revalidate
+  // the public cause page after approval. Without this, the page kept showing the
+  // pre-approval `raisedAmount` until the 60s ISR window expired — even though the
+  // DB already had the incremented total.
+  const before = await prisma.donation.findUnique({
+    where: { id },
+    select: { amount: true, cause: { select: { slug: true } } },
+  });
   await approveDonation(id, user.userId, { editedAmount });
   await issueReceiptForDonation(id);
   await audit({
@@ -104,6 +111,10 @@ export async function approveDonationAction(formData: FormData) {
     },
   });
   revalidatePath("/admin/donations");
+  // Bust the ISR cache on every public surface that shows this cause's raised total.
+  revalidatePath("/");
+  revalidatePath("/current-causes");
+  if (before?.cause.slug) revalidatePath(`/donations/${before.cause.slug}`);
 }
 
 export async function rejectDonationAction(formData: FormData) {
