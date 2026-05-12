@@ -1,9 +1,11 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
+import { getCurrentUser } from "@/lib/session";
 import { inrShort } from "@/lib/format";
 import { setCauseStatusAction, deleteCauseUpdateAction } from "../actions";
 import AddUpdateForm from "./AddUpdateForm";
+import AnnouncementPanel from "./AnnouncementPanel";
 
 export const dynamic = "force-dynamic";
 
@@ -20,11 +22,30 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
 
 export default async function AdminCauseDetailPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
+  const me = await getCurrentUser();
   const cause = await prisma.cause.findUnique({
     where: { slug },
     include: { updates: { orderBy: { sortOrder: "asc" } } },
   });
   if (!cause) notFound();
+
+  // Announcements: only ADMIN-role users get the trigger UI. Editors see history.
+  const [optedInDonorCount, announcementsRaw] = await Promise.all([
+    prisma.donor.count({ where: { unsubscribed: false, email: { contains: "@" } } }),
+    prisma.causeAnnouncement.findMany({
+      where: { causeId: cause.id },
+      orderBy: { startedAt: "desc" },
+      select: {
+        id: true, subject: true, totalRecipients: true, successCount: true,
+        failureCount: true, status: true, startedAt: true, completedAt: true,
+      },
+    }),
+  ]);
+  const announcements = announcementsRaw.map((a) => ({
+    ...a,
+    startedAt: a.startedAt.toISOString(),
+    completedAt: a.completedAt?.toISOString() ?? null,
+  }));
 
   const pct = cause.goalAmount > 0 ? Math.min(100, Math.round((cause.raisedAmount / cause.goalAmount) * 100)) : 0;
 
@@ -127,6 +148,22 @@ export default async function AdminCauseDetailPage({ params }: { params: Promise
           <AddUpdateForm slug={cause.slug} />
         </div>
       </div>
+
+      {/* Launch announcement (bulk donor mailer). Hidden for the support-microcharity
+          cause itself — it'd loop. ADMIN-role only. */}
+      {me?.role === "ADMIN" && cause.slug !== "support-microcharity" && cause.status === "PUBLISHED" && (
+        <div>
+          <div className="rounded-2xl bg-white border border-[var(--color-line)] p-6">
+            <AnnouncementPanel
+              causeId={cause.id}
+              causeSlug={cause.slug}
+              causeTitle={cause.title}
+              optedInDonorCount={optedInDonorCount}
+              history={announcements}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

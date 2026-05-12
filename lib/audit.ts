@@ -27,7 +27,10 @@ export type AuditAction =
   | "user.password.reset"          // self-service via /admin/profile
   // Cause applications
   | "application.status.change"
-  | "application.notes.save";
+  | "application.notes.save"
+  // Launch announcements (bulk mailer)
+  | "announcement.send.start"
+  | "announcement.send.cancel";
 
 export type AuditInput = {
   action: AuditAction;

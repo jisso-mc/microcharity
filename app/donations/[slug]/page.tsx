@@ -115,27 +115,44 @@ export default async function CausePage({ params }: { params: Promise<{ slug: st
         <aside className="lg:col-span-5 lg:pl-4">
           <div className="lg:sticky lg:top-28 space-y-6">
             <div className="rounded-2xl border border-[var(--color-line)] bg-white p-6 md:p-8">
-              <p className="font-display text-3xl md:text-4xl text-accent-600 leading-none">{fmt(campaign.raised)}</p>
-              <p className="text-sm text-muted mt-1">raised of {fmt(campaign.goal)} goal</p>
-
-              <div className="mt-4 h-2 rounded-full bg-[var(--color-line)] overflow-hidden">
-                <div className="h-full bg-accent-600 rounded-full" style={{ width: `${pct}%` }}></div>
-              </div>
-
-              <div className="mt-3 flex items-baseline justify-between text-xs">
-                <span className="font-semibold text-ink">{pct}% funded</span>
-                {campaign.status === "active" && remaining > 0 && (
-                  <span className="text-muted">{fmt(remaining)} to go</span>
-                )}
-              </div>
-
-              {campaign.status === "active" ? (
-                <DonateForm slug={campaign.slug} />
+              {/*
+                "Support MicroCharity" is the unrestricted-giving page — no goal, no
+                progress bar, just a donate form. Every other cause shows raised /
+                goal / % funded as usual.
+              */}
+              {campaign.slug === "support-microcharity" ? (
+                <>
+                  <p className="font-display text-2xl md:text-3xl text-ink leading-tight">Support MicroCharity</p>
+                  <p className="text-sm text-muted mt-2 leading-relaxed">
+                    Every contribution funds the running of MicroCharity. 100% of donations to specific causes reach the beneficiaries — your support here covers the operations.
+                  </p>
+                  <DonateForm slug={campaign.slug} />
+                </>
               ) : (
-                <div className="mt-6 rounded-lg bg-[var(--color-soft)] border border-[var(--color-line)] p-4 text-sm">
-                  <p className="font-semibold text-ink">This cause is closed.</p>
-                  <p className="text-muted mt-1">Thank you to everyone who contributed.</p>
-                </div>
+                <>
+                  <p className="font-display text-3xl md:text-4xl text-accent-600 leading-none">{fmt(campaign.raised)}</p>
+                  <p className="text-sm text-muted mt-1">raised of {fmt(campaign.goal)} goal</p>
+
+                  <div className="mt-4 h-2 rounded-full bg-[var(--color-line)] overflow-hidden">
+                    <div className="h-full bg-accent-600 rounded-full" style={{ width: `${pct}%` }}></div>
+                  </div>
+
+                  <div className="mt-3 flex items-baseline justify-between text-xs">
+                    <span className="font-semibold text-ink">{pct}% funded</span>
+                    {campaign.status === "active" && remaining > 0 && (
+                      <span className="text-muted">{fmt(remaining)} to go</span>
+                    )}
+                  </div>
+
+                  {campaign.status === "active" ? (
+                    <DonateForm slug={campaign.slug} />
+                  ) : (
+                    <div className="mt-6 rounded-lg bg-[var(--color-soft)] border border-[var(--color-line)] p-4 text-sm">
+                      <p className="font-semibold text-ink">This cause is closed.</p>
+                      <p className="text-muted mt-1">Thank you to everyone who contributed.</p>
+                    </div>
+                  )}
+                </>
               )}
             </div>
 

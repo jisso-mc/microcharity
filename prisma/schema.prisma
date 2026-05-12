@@ -78,6 +78,7 @@ model Cause {
 
   donations        Donation[]
   updates          CauseUpdate[]
+  announcements    CauseAnnouncement[]
 
   createdById      String?
   createdBy        User?         @relation(fields: [createdById], references: [id])
@@ -223,6 +224,7 @@ model User {
   causes              Cause[]
   approvals           Donation[]
   reviewedApplications CauseApplication[]
+  announcementsSent   CauseAnnouncement[]
 
   createdAt       DateTime   @default(now())
 }
@@ -294,6 +296,73 @@ model CauseApplication {
   @@index([formType])
   @@index([status])
   @@index([createdAt])
+}
+
+// ---------- Cause launch announcements (bulk mailers) ----------
+
+enum AnnouncementStatus {
+  PENDING    // recipients snapshotted, no batch sent yet
+  SENDING    // at least one batch processed
+  COMPLETED  // every recipient is SENT or FAILED
+  CANCELLED  // admin aborted partway through
+}
+
+enum AnnouncementRecipientStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
+// One row per "send" of a cause launch email. Admin can re-send a cause (creates a
+// new row). totalRecipients is captured at creation time; success/failureCount
+// update as each batch finishes.
+model CauseAnnouncement {
+  id              String                   @id @default(cuid())
+  causeId         String
+  cause           Cause                    @relation(fields: [causeId], references: [id])
+
+  sentByUserId    String?
+  sentBy          User?                    @relation(fields: [sentByUserId], references: [id])
+
+  subject         String
+
+  totalRecipients Int                      @default(0)
+  successCount    Int                      @default(0)
+  failureCount    Int                      @default(0)
+
+  status          AnnouncementStatus       @default(PENDING)
+
+  startedAt       DateTime                 @default(now())
+  completedAt     DateTime?
+
+  recipients      AnnouncementRecipient[]
+
+  @@index([causeId])
+  @@index([status])
+  @@index([startedAt])
+}
+
+// One row per (announcement, donor) pair. The recipient list is snapshotted at
+// announcement-creation time so that donors who unsubscribe mid-send are still
+// processed (they just get SKIPPED at send time, not retroactively removed).
+model AnnouncementRecipient {
+  id              String                       @id @default(cuid())
+  announcementId  String
+  announcement    CauseAnnouncement            @relation(fields: [announcementId], references: [id], onDelete: Cascade)
+
+  donorEmail      String
+  donorName       String
+
+  status          AnnouncementRecipientStatus  @default(PENDING)
+  error           String?
+  sentAt          DateTime?
+
+  // Per-recipient HMAC token so the unsubscribe link in one donor's email can't be
+  // used to unsubscribe another donor.
+  unsubscribeToken String                      @unique
+
+  @@index([announcementId, status])
+  @@index([donorEmail])
 }
 
 // ---------- Rate limiting ----------
