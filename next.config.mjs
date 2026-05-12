@@ -1,5 +1,23 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // Explicitly bundle non-imported file assets into the serverless function. Next.js
+  // auto-traces files reached via `import`, but `fs.readFileSync` paths in lib/receipt.ts
+  // (logo, signature, Noto Sans TTFs) aren't picked up — so on Vercel the function
+  // would throw with ENOENT at runtime. The glob covers every file the receipt builder
+  // ever reads from disk.
+  outputFileTracingIncludes: {
+    "/api/**/*": [
+      "./public/fonts/**/*",
+      "./public/logo.jpg",
+      "./public/receipt-signature.jpg",
+    ],
+    "/admin/**/*": [
+      "./public/fonts/**/*",
+      "./public/logo.jpg",
+      "./public/receipt-signature.jpg",
+    ],
+  },
+
   images: {
     remotePatterns: [
       // Cause images now live on Vercel Blob — wildcard covers every blob store

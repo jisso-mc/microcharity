@@ -345,7 +345,11 @@ export async function issueReceiptForDonation(donationId: string): Promise<void>
       data: { sentAt: new Date(), sentToEmail: d.donorEmailSnapshot },
     });
   } catch (err) {
-    console.error("[issueReceiptForDonation] failed for", donationId, err);
+    // Print the error chain in full so Vercel function logs include the
+    // pdf-lib / nodemailer message (the previous one-line log gave us only
+    // "[issueReceiptForDonation] failed for <id>" which wasn't actionable).
+    console.error("[issueReceiptForDonation] failed for", donationId);
+    console.error(err instanceof Error ? err.stack ?? err.message : err);
   }
 }
 
