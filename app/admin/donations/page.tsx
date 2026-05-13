@@ -161,7 +161,10 @@ export default async function DonationsAdminPage({ searchParams }: { searchParam
                     </span>
                   </td>
                   <td className="px-4 py-3 text-right tabular-nums font-semibold">{inrShort(d.amount)}</td>
-                  <td className="px-4 py-3 text-xs text-muted whitespace-nowrap">{d.createdAt.toLocaleDateString("en-IN")}</td>
+                  <td className="px-4 py-3 text-xs text-muted whitespace-nowrap">
+                    <span className="block">{d.createdAt.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}</span>
+                    <span className="block">{d.createdAt.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: true })}</span>
+                  </td>
                   <td className="px-4 py-3">
                     {d.status === "PENDING" ? (
                       <PendingActions id={d.id} amount={d.amount} />
