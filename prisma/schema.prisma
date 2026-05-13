@@ -363,9 +363,12 @@ model AnnouncementRecipient {
   sentAt          DateTime?
 
   // Per-recipient HMAC token so the unsubscribe link in one donor's email can't be
-  // used to unsubscribe another donor.
-  unsubscribeToken String                      @unique
+  // used to unsubscribe another donor. Deterministic per email (HMAC(email, secret))
+  // so the SAME donor across announcements gets the same token — therefore NOT
+  // globally unique. Uniqueness is per (announcement, donor) instead.
+  unsubscribeToken String
 
+  @@unique([announcementId, donorEmail])
   @@index([announcementId, status])
   @@index([donorEmail])
 }
