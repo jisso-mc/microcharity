@@ -1,5 +1,15 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // Server actions default to a 1 MB body cap — too small for the featured-image
+  // uploads on the new-cause form (client allows up to 2 MB). Without this lift,
+  // larger images are silently stripped from FormData before our action sees them,
+  // and the new cause ends up using the predecessor's inherited image URL.
+  experimental: {
+    serverActions: {
+      bodySizeLimit: "5mb",
+    },
+  },
+
   // Explicitly bundle non-imported file assets into the serverless function. Next.js
   // auto-traces files reached via `import`, but `fs.readFileSync` paths in lib/receipt.ts
   // (logo, signature, Noto Sans TTFs) aren't picked up — so on Vercel the function

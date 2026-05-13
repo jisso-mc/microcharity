@@ -98,6 +98,14 @@ export async function createCauseAction(_prev: CauseFormState, formData: FormDat
   // Featured image: if admin uploaded a file, push it to Vercel Blob and use that URL.
   // Otherwise keep whatever `image` URL came in (predecessor's, manually pasted, or empty).
   const featuredImageFile = formData.get("featuredImageFile");
+  // Trace what came through — earlier bug had Next.js silently strip >1 MB files;
+  // logging the size at every create helps catch a future regression fast.
+  console.log("[causes/create] featuredImageFile:", {
+    isFile: featuredImageFile instanceof File,
+    size: featuredImageFile instanceof File ? featuredImageFile.size : 0,
+    type: featuredImageFile instanceof File ? featuredImageFile.type : null,
+    inheritedImage: image || null,
+  });
   if (featuredImageFile instanceof File && featuredImageFile.size > 0) {
     const MAX = 2 * 1024 * 1024; // 2 MB
     const ALLOWED = ["image/jpeg", "image/png", "image/webp"];
