@@ -94,23 +94,20 @@ export function renderAnnouncementHtml(opts: {
           </h1>
         </td></tr>
 
-        <!-- Cause title + summary + image + CTA -->
+        <!-- Cause: image → title → description → CTA, in that order. -->
         <tr><td style="padding:20px 24px 0;">
+          ${opts.cause.featuredImage
+            ? `<p style="margin:0 0 16px;"><a href="${causeUrl}" style="display:block;"><img src="${opts.cause.featuredImage}" alt="${esc(opts.cause.title)}" style="max-width:100%;height:auto;display:block;border:0;border-radius:8px;" /></a></p>`
+            : ""
+          }
           <h2 style="margin:0 0 12px;font-size:22px;font-weight:600;line-height:1.3;">
             <a href="${causeUrl}" style="color:#2a7fb8;text-decoration:underline;">${esc(opts.cause.title)}</a>
           </h2>
           <p style="margin:0 0 16px;font-size:14px;color:#3b3838;line-height:1.6;">
             ${summaryHtml}
           </p>
-          ${opts.cause.featuredImage
-            ? `<p style="margin:0 0 16px;"><img src="${opts.cause.featuredImage}" alt="${esc(opts.cause.title)}" style="max-width:100%;height:auto;display:block;border:0;border-radius:8px;" /></p>`
-            : ""
-          }
-          <p style="margin:0 0 12px;">
-            <a href="${causeUrl}" style="display:inline-block;background:#cc2222;color:#ffffff;text-decoration:none;font-weight:600;padding:12px 28px;border-radius:6px;font-size:15px;">Donate Now</a>
-          </p>
           <p style="margin:0 0 24px;">
-            <a href="${causeUrl}" style="color:#2a7fb8;font-size:13px;text-decoration:underline;">${esc(opts.cause.title)}</a>
+            <a href="${causeUrl}" style="display:inline-block;background:#cc2222;color:#ffffff;text-decoration:none;font-weight:600;padding:12px 28px;border-radius:6px;font-size:15px;">Donate Now</a>
           </p>
         </td></tr>
 
