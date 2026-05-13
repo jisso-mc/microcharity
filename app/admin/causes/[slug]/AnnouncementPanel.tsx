@@ -19,7 +19,8 @@ type Props = {
   causeSlug: string;
   causeTitle: string;
   optedInDonorCount: number;
-  adminEmail: string;
+  // Fixed list of admin reviewers who receive test sends (lib/trust.ts).
+  testRecipientEmails: string[];
   history: AnnouncementProgress[];
 };
 
@@ -58,8 +59,9 @@ export default function AnnouncementPanel(props: Props) {
   }, [active]);
 
   async function onStart() {
+    const testList = props.testRecipientEmails.join(", ");
     const msg = testMode
-      ? `Send a TEST email of "${props.causeTitle}" to your address (${props.adminEmail}) only?\n\nThis lets you preview the email exactly as donors would see it. Nothing goes out to the donor list.`
+      ? `Send a TEST email of "${props.causeTitle}" to the admin reviewer list:\n\n${testList}\n\nNothing goes out to the donor list.`
       : `Send the real launch announcement for "${props.causeTitle}" to ALL ${props.optedInDonorCount} opted-in donors?\n\nThis can't be undone. Donors who unsubscribe later will still get this email.`;
     if (!confirm(msg)) return;
     setStarting(true);
@@ -101,17 +103,18 @@ export default function AnnouncementPanel(props: Props) {
               className="mt-1 accent-accent-600"
             />
             <span className="text-sm text-ink leading-relaxed">
-              <strong>Send test to me only</strong> ({props.adminEmail})
+              <strong>Send test to the admin reviewer list</strong>
               <span className="block text-xs text-muted mt-0.5">
-                Recommended for the first send. Uncheck when you&apos;ve verified the
-                template and are ready to fire to all {props.optedInDonorCount} donors.
+                Sends to {props.testRecipientEmails.length} reviewers ({props.testRecipientEmails.join(", ")}).
+                Recommended for the first send. Uncheck when the template looks right
+                and you&apos;re ready to fire to all {props.optedInDonorCount} donors.
               </span>
             </span>
           </label>
           <div className="flex items-center justify-between gap-3">
             <p className="text-xs text-muted">
               {testMode
-                ? <>Will send <strong className="text-ink">1 email</strong> to <strong className="text-ink">{props.adminEmail}</strong>.</>
+                ? <>Will send <strong className="text-ink">{props.testRecipientEmails.length} emails</strong> to the reviewer list.</>
                 : <>Will send <strong className="text-accent-700">{props.optedInDonorCount} emails</strong> to every opted-in donor. <strong>Not reversible.</strong></>
               }
             </p>
@@ -123,7 +126,7 @@ export default function AnnouncementPanel(props: Props) {
                 testMode ? "bg-ink hover:bg-ink/80" : "bg-accent-600 hover:bg-accent-700"
               }`}
             >
-              {starting ? "Starting…" : testMode ? "Send test to me" : "Send to all donors"}
+              {starting ? "Starting…" : testMode ? "Send test to reviewers" : "Send to all donors"}
             </button>
           </div>
         </div>

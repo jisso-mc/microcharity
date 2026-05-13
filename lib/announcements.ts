@@ -70,7 +70,11 @@ export function renderAnnouncementHtml(opts: {
   const logoUrl = `${opts.origin}/logo.jpg`;
   const mailerImageUrl = `${opts.origin}/mailer-image.jpg`;
 
-  const summaryHtml = esc(opts.cause.summary).replace(/\n/g, "<br/>");
+  // Body of the cause section: the new timeline entry text followed by a small
+  // pointer back to the full cause page. Paragraphs in the entry body are
+  // separated by blank lines; we preserve them as <br/><br/>.
+  const summaryBody = esc(opts.cause.summary).replace(/\r?\n\r?\n/g, "<br/><br/>").replace(/\n/g, "<br/>");
+  const summaryHtml = `${summaryBody}<br/><br/><em style="color:#6b6363;">(see the cause page for full details)</em>`;
 
   return `<!doctype html>
 <html><body style="margin:0;padding:0;background:#f7f6f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#3b3838;">
@@ -120,11 +124,8 @@ export function renderAnnouncementHtml(opts: {
             the unique tag of <em>'zero-expense charity'</em> where every penny of the donor reaches
             the needy. Would you like to donate towards our running expenses? Please do!
           </p>
-          <p style="margin:0 0 12px;">
-            <a href="${supportUrl}" style="display:inline-block;background:#cc2222;color:#ffffff;text-decoration:none;font-weight:600;padding:12px 28px;border-radius:6px;font-size:15px;">Donate Now</a>
-          </p>
           <p style="margin:0 0 24px;">
-            <a href="${supportUrl}" style="color:#2a7fb8;font-size:13px;text-decoration:underline;">Support MicroCharity</a>
+            <a href="${supportUrl}" style="display:inline-block;background:#cc2222;color:#ffffff;text-decoration:none;font-weight:600;padding:12px 28px;border-radius:6px;font-size:15px;">Donate Now</a>
           </p>
         </td></tr>
 
@@ -186,19 +187,19 @@ export function renderAnnouncementText(opts: {
  * intentionally NOT idempotent — clicking "Send" twice creates two announcements.
  * The UI prevents that by showing a single in-flight row.
  *
- * When `testRecipient` is provided, the recipient list is overridden to be just
- * that email + name. Used by the "Send test to me" toggle so admins can preview
- * the email in their own inbox before fanning out to 300+ donors.
+ * When `testRecipients` is provided, the recipient list is overridden to that
+ * fixed set. Used by the "Send test" toggle so admins can preview the email in
+ * their own inboxes before fanning out to 300+ donors.
  */
 export async function createAnnouncement(input: {
   causeId: string;
   subject: string;
   sentByUserId: string | null;
-  testRecipient?: { name: string; email: string };
+  testRecipients?: Array<{ name: string; email: string }>;
 }): Promise<{ id: string; totalRecipients: number; isTest: boolean }> {
-  const isTest = !!input.testRecipient;
+  const isTest = !!(input.testRecipients && input.testRecipients.length > 0);
   const recipients: Array<{ name: string; email: string }> = isTest
-    ? [input.testRecipient!]
+    ? input.testRecipients!
     : (await prisma.donor.findMany({
         where: { unsubscribed: false, email: { contains: "@" } },
         select: { name: true, email: true },
@@ -206,7 +207,7 @@ export async function createAnnouncement(input: {
 
   if (recipients.length === 0) {
     throw new Error(isTest
-      ? "Test recipient is missing — you need an email on your admin profile."
+      ? "Test recipient list is empty — edit TEST_ANNOUNCEMENT_RECIPIENTS in lib/trust.ts."
       : "No opted-in donors to send to.");
   }
 
@@ -245,7 +246,21 @@ export async function processNextBatch(announcementId: string, opts: { origin: s
 }> {
   const a = await prisma.causeAnnouncement.findUnique({
     where: { id: announcementId },
-    include: { cause: { select: { title: true, slug: true, summary: true, featuredImage: true, contentHtml: true } } },
+    include: {
+      cause: {
+        select: {
+          title: true, slug: true, summary: true, featuredImage: true, contentHtml: true,
+          // Pull the cause's latest timeline entry — for follow-up causes this is the
+          // freshly-added "new entry" that the admin wrote when continuing the
+          // campaign. We use its body as the email's narrative.
+          updates: {
+            orderBy: { sortOrder: "desc" },
+            take: 1,
+            select: { body: true },
+          },
+        },
+      },
+    },
   });
   if (!a) throw new Error("Announcement not found.");
   if (a.status === "COMPLETED" || a.status === "CANCELLED") {
@@ -278,7 +293,7 @@ export async function processNextBatch(announcementId: string, opts: { origin: s
   const causeInput: AnnouncementCauseInput = {
     slug: a.cause.slug,
     title: a.cause.title,
-    summary: pickSummary(a.cause),
+    summary: pickSummary({ summary: a.cause.summary, contentHtml: a.cause.contentHtml, latestUpdateBody: a.cause.updates[0]?.body ?? null }),
     featuredImage: a.cause.featuredImage,
   };
 
@@ -337,16 +352,19 @@ export async function processNextBatch(announcementId: string, opts: { origin: s
   return { processed: batch.length, sent, failed, remaining, status: finalStatus };
 }
 
-// Pick the best summary text for the announcement body: prefer Cause.summary if it
-// has at least ~80 chars (a real paragraph), else fall back to the first paragraph
-// of contentHtml stripped of tags. Avoids the email reading "Help Saniya." with no
-// context for causes where summary is a one-liner.
-function pickSummary(c: { summary: string | null; contentHtml: string | null }): string {
+// Pick the narrative text for the announcement body. Order of preference:
+//   1. The cause's latest timeline entry body — that's the fresh "new entry"
+//      the admin just wrote when continuing a campaign (the most common case).
+//   2. Cause.summary if it has at least ~80 chars (a real paragraph).
+//   3. First paragraph of contentHtml stripped of tags.
+//   4. Fallback string pointing to the cause page.
+function pickSummary(c: { summary: string | null; contentHtml: string | null; latestUpdateBody: string | null }): string {
+  const latest = (c.latestUpdateBody ?? "").trim();
+  if (latest) return latest;
   const s = (c.summary ?? "").trim();
   if (s.length >= 80) return s;
   const html = (c.contentHtml ?? "").trim();
   if (html) {
-    // Take the first paragraph; strip tags conservatively.
     const firstPara = html.split(/<\/p>/i)[0] ?? html;
     const text = firstPara.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
     if (text.length > s.length) return text;

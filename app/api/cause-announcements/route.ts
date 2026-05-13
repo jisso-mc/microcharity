@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/session";
 import { createAnnouncement, ANNOUNCEMENT_PROGRESS_SELECT } from "@/lib/announcements";
 import { audit } from "@/lib/audit";
+import { TEST_ANNOUNCEMENT_RECIPIENTS } from "@/lib/trust";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -39,7 +40,8 @@ export async function POST(req: Request) {
       causeId: cause.id,
       subject: testSubject,
       sentByUserId: await safeUserId(user.userId),
-      testRecipient: isTest ? { name: user.name, email: user.email } : undefined,
+      // Test mode sends to a fixed list of admin reviewers (see lib/trust.ts).
+      testRecipients: isTest ? TEST_ANNOUNCEMENT_RECIPIENTS : undefined,
     });
 
     await audit({

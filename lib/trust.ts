@@ -30,6 +30,15 @@ export const TRUST = {
   },
 };
 
+// Recipients of test-mode launch announcements. Edit this list (not the schema)
+// when a new admin needs to be in the loop on email QA. Kept in code so it's
+// version-controlled — env vars get forgotten.
+export const TEST_ANNOUNCEMENT_RECIPIENTS: Array<{ name: string; email: string }> = [
+  { name: "Jisso Jose",  email: "jissojose@gmail.com" },
+  { name: "Nanz Willy",  email: "nanzwilly@gmail.com" },
+  { name: "Biju",        email: "bijuu@gmail.com" },
+];
+
 // NEFT / IMPS / RTGS bank details shown to donors who choose Offline mode.
 export const BANK = {
   accountName: "MicroCharity Trust",
