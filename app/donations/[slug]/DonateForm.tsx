@@ -28,14 +28,17 @@ export default function DonateForm({ slug }: { slug: string }) {
   const [done, setDone] = useState<{ amount: number; name: string; method: Method } | null>(null);
 
   function readDonor(form: FormData) {
-    const first = String(form.get("firstName") ?? "").trim();
-    const last  = String(form.get("lastName") ?? "").trim();
     return {
       slug,
       amount: Number(form.get("amount")),
-      name: [first, last].filter(Boolean).join(" "),
-      email: String(form.get("email") ?? "").trim(),
+      name:  String(form.get("name") ?? "").trim(),
       phone: String(form.get("phone") ?? "").trim(),
+      email: String(form.get("email") ?? "").trim(),
+      // PAN normalised to upper-case + stripped of stray whitespace before it
+      // leaves the browser. Validation against the Indian PAN regex happens
+      // server-side; we only do shape-cleanup here so the user sees their
+      // canonicalised value if validation fails.
+      pan:   String(form.get("pan") ?? "").trim().toUpperCase(),
       address: String(form.get("address") ?? "").trim(),
     };
   }
@@ -65,7 +68,7 @@ export default function DonateForm({ slug }: { slug: string }) {
     }
   }
 
-  async function runRazorpay(d: { slug: string; amount: number; name: string; email: string; phone: string }) {
+  async function runRazorpay(d: { slug: string; amount: number; name: string; email: string; phone: string; pan: string }) {
     const orderRes = await fetch("/api/donate/online", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -230,11 +233,22 @@ export default function DonateForm({ slug }: { slug: string }) {
 
         {/* Donor details */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <Field label="First name" name="firstName" required />
-          <Field label="Last name" name="lastName" />
-          <Field label="Email" name="email" type="email" required colSpan />
-          <Field label="Phone" name="phone" type="tel" required={method !== "razorpay"} />
-          <Field label="Address (city, state)" name="address" required={method !== "razorpay"} placeholder="e.g. Bangalore, Karnataka" />
+          <Field label="Name" name="name" required colSpan />
+          <Field label="Phone" name="phone" type="tel" required />
+          <Field label="Email" name="email" type="email" required />
+          <Field
+            label="PAN"
+            name="pan"
+            required
+            colSpan
+            placeholder="e.g. ABCDE1234F"
+            autoComplete="off"
+            maxLength={10}
+            pattern="[A-Za-z]{5}[0-9]{4}[A-Za-z]"
+            uppercase
+            hint="Required for 80G tax-exempt receipt."
+          />
+          <Field label="Address (city, state)" name="address" required={method !== "razorpay"} placeholder="e.g. Bangalore, Karnataka" colSpan />
         </div>
 
         <button type="submit" disabled={busy} className="w-full inline-flex items-center justify-center gap-2 rounded-full bg-accent-600 hover:bg-accent-700 disabled:opacity-60 text-white font-semibold px-6 py-3 transition">
@@ -273,8 +287,22 @@ function MethodOption({
 }
 
 function Field({
-  label, name, type = "text", required, placeholder, colSpan,
-}: { label: string; name: string; type?: string; required?: boolean; placeholder?: string; colSpan?: boolean }) {
+  label, name, type = "text", required, placeholder, colSpan, hint,
+  autoComplete, inputMode, pattern, maxLength, uppercase,
+}: {
+  label: string;
+  name: string;
+  type?: string;
+  required?: boolean;
+  placeholder?: string;
+  colSpan?: boolean;
+  hint?: string;
+  autoComplete?: string;
+  inputMode?: "text" | "email" | "tel" | "numeric" | "decimal";
+  pattern?: string;
+  maxLength?: number;
+  uppercase?: boolean;
+}) {
   return (
     <div className={colSpan ? "sm:col-span-2" : ""}>
       <label className="block text-sm font-semibold text-ink mb-1">{label}{required && <span className="text-accent-600"> *</span>}</label>
@@ -283,8 +311,14 @@ function Field({
         name={name}
         required={required}
         placeholder={placeholder}
+        autoComplete={autoComplete}
+        inputMode={inputMode}
+        pattern={pattern}
+        maxLength={maxLength}
+        onInput={uppercase ? (e) => { const t = e.currentTarget; const pos = t.selectionStart; t.value = t.value.toUpperCase(); if (pos != null) t.setSelectionRange(pos, pos); } : undefined}
         className="w-full rounded-lg border border-[var(--color-line)] focus:border-accent-600 focus:ring-2 focus:ring-accent-100 outline-none px-3 py-2.5 text-sm"
       />
+      {hint && <p className="text-xs text-muted mt-1">{hint}</p>}
     </div>
   );
 }

@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { razorpay, razorpayKeyId, isRazorpayConfigured } from "@/lib/razorpay";
 import { createOnlineDonationOrder } from "@/lib/donations";
 import { rateLimit, callerIp, LIMITS } from "@/lib/rate-limit";
+import { normalizePan } from "@/lib/donate-input";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -28,16 +29,19 @@ export async function POST(req: Request) {
     const amount = Number(body.amount);
     const name   = String(body.name ?? "").trim();
     const email  = String(body.email ?? "").trim().toLowerCase();
-    const phone  = String(body.phone ?? "").trim() || undefined;
+    const phone  = String(body.phone ?? "").trim();
+    const pan    = normalizePan(body.pan);
 
     if (!slug)                   return NextResponse.json({ error: "Cause is required." }, { status: 400 });
     if (!Number.isFinite(amount) || amount < 100) {
       return NextResponse.json({ error: "Minimum donation is ₹100." }, { status: 400 });
     }
     if (!name)                   return NextResponse.json({ error: "Your name is required." }, { status: 400 });
+    if (!phone)                  return NextResponse.json({ error: "Phone is required." }, { status: 400 });
     if (!email || !/^\S+@\S+\.\S+$/.test(email)) {
       return NextResponse.json({ error: "A valid email is required for the receipt." }, { status: 400 });
     }
+    if (!pan) return NextResponse.json({ error: "A valid PAN is required (10 characters, e.g. ABCDE1234F)." }, { status: 400 });
 
     const cause = await prisma.cause.findUnique({
       where: { slug },
@@ -67,6 +71,7 @@ export async function POST(req: Request) {
       donorName: name,
       donorEmail: email,
       donorPhone: phone,
+      donorPan: pan,
       amount: Math.round(amount),
       razorpayOrderId: order.id,
     });
@@ -78,7 +83,7 @@ export async function POST(req: Request) {
       amount: amountInPaise,
       currency: "INR",
       causeTitle: cause.title,
-      prefill: { name, email, contact: phone ?? "" },
+      prefill: { name, email, contact: phone },
     });
   } catch (e) {
     console.error("[donate/online]", e);

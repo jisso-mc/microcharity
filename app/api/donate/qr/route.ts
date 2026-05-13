@@ -39,6 +39,7 @@ export async function POST(req: Request) {
       donorName: parsed.name,
       donorEmail: parsed.email,
       donorPhone: parsed.phone,
+      donorPan: parsed.pan,
       donorAddress: parsed.address,
       amount: parsed.amount,
       type: "QR",

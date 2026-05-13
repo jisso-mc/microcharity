@@ -78,6 +78,7 @@ export async function createUnverifiedDonation(input: {
   donorName: string;
   donorEmail: string;
   donorPhone?: string;
+  donorPan?: string;
   donorAddress?: string;
   amount: number;
   type: "OFFLINE" | "QR";
@@ -86,6 +87,10 @@ export async function createUnverifiedDonation(input: {
   paymentDate?: Date;
 }) {
   const email = input.donorEmail.trim().toLowerCase();
+  // PAN is PII — encrypt before any DB write. Re-encrypting on each donation is
+  // intentional: same plaintext → different ciphertext (random IV) so a DB leak
+  // can't be used to correlate "same PAN" across rows.
+  const panCipher = encryptPii(input.donorPan);
   return prisma.$transaction(async (tx) => {
     const donor = await tx.donor.upsert({
       where: { email },
@@ -93,12 +98,14 @@ export async function createUnverifiedDonation(input: {
         name: input.donorName,
         phone: input.donorPhone ?? undefined,
         address: input.donorAddress ?? undefined,
+        ...(panCipher ? { panEncrypted: panCipher } : {}),
       },
       create: {
         email,
         name: input.donorName,
         phone: input.donorPhone,
         address: input.donorAddress,
+        panEncrypted: panCipher,
       },
     });
     return tx.donation.create({
@@ -108,6 +115,7 @@ export async function createUnverifiedDonation(input: {
         donorNameSnapshot: input.donorName,
         donorEmailSnapshot: email,
         addressSnapshot: input.donorAddress,
+        panEncrypted: panCipher,
         amount: input.amount,
         type: input.type,
         status: "PENDING",
@@ -128,21 +136,25 @@ export async function createOnlineDonationOrder(input: {
   donorName: string;
   donorEmail: string;
   donorPhone?: string;
+  donorPan?: string;
   amount: number;            // INR rupees (integer)
   razorpayOrderId: string;
 }) {
   const email = input.donorEmail.trim().toLowerCase();
+  const panCipher = encryptPii(input.donorPan);
   return prisma.$transaction(async (tx) => {
     const donor = await tx.donor.upsert({
       where: { email },
       update: {
         name: input.donorName,
         phone: input.donorPhone ?? undefined,
+        ...(panCipher ? { panEncrypted: panCipher } : {}),
       },
       create: {
         email,
         name: input.donorName,
         phone: input.donorPhone,
+        panEncrypted: panCipher,
       },
     });
     const donation = await tx.donation.create({
@@ -151,6 +163,7 @@ export async function createOnlineDonationOrder(input: {
         donorId: donor.id,
         donorNameSnapshot: input.donorName,
         donorEmailSnapshot: email,
+        panEncrypted: panCipher,
         amount: input.amount,
         type: "ONLINE",
         status: "PENDING",
