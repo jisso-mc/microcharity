@@ -1,9 +1,18 @@
 import Link from "next/link";
 import CauseCard from "@/components/CauseCard";
 import { site } from "@/lib/data/site";
-import { getActiveBeneficiaries } from "@/lib/data/causes";
+import { getActiveBeneficiaries, getClosedBeneficiaries, type Beneficiary } from "@/lib/data/causes";
 
 export const revalidate = 60;
+
+// Sort a list of beneficiaries by the date of their most-recent campaign, newest
+// first. The data layer keeps each beneficiary's campaigns in chronological order
+// (oldest → newest); the last entry's datePosted is therefore the most recent.
+function byMostRecentCampaign(a: Beneficiary, b: Beneficiary): number {
+  const aDate = a.campaigns[a.campaigns.length - 1]?.datePosted ?? "";
+  const bDate = b.campaigns[b.campaigns.length - 1]?.datePosted ?? "";
+  return bDate.localeCompare(aDate);
+}
 
 const valueProps = [
   { title: "0% Admin Costs",  desc: "Every single rupee you donate goes directly to the cause. Operations are run by volunteers." },
@@ -12,7 +21,13 @@ const valueProps = [
 ];
 
 export default async function HomePage() {
-  const featured = (await getActiveBeneficiaries()).slice(0, 3);
+  const [activeAll, closedAll] = await Promise.all([
+    getActiveBeneficiaries(),
+    getClosedBeneficiaries(),
+  ]);
+  const featured = activeAll.slice(0, 3);
+  // Past causes: newest 6 closed beneficiaries by most-recent campaign date.
+  const pastFeatured = [...closedAll].sort(byMostRecentCampaign).slice(0, 6);
 
   return (
     <>
@@ -123,6 +138,30 @@ export default async function HomePage() {
           </div>
         </div>
       </section>
+
+      {/* PAST CAUSES — six most-recent closed beneficiaries. View more lands on the
+          Success Stories page which lists every closed campaign. */}
+      {pastFeatured.length > 0 && (
+        <section className="bg-[var(--color-soft)] border-t border-[var(--color-line)]">
+          <div className="container-page py-20 md:py-24">
+            <div className="flex flex-wrap items-end justify-between gap-4 mb-10">
+              <div>
+                <h2 className="font-display text-3xl md:text-4xl text-ink">Past causes</h2>
+                <p className="text-sm text-muted mt-2 max-w-xl">
+                  Closed campaigns we&apos;ve already funded and disbursed. The newest six are below.
+                </p>
+              </div>
+              <Link href="/success-stories" className="text-sm font-semibold text-accent-600 hover:text-accent-700 inline-flex items-center gap-1">
+                View more
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+              </Link>
+            </div>
+            <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
+              {pastFeatured.map(b => <CauseCard key={b.key} beneficiary={b} />)}
+            </div>
+          </div>
+        </section>
+      )}
 
       {/* FOCUS AREAS */}
       <section className="bg-white border-t border-[var(--color-line)]">
