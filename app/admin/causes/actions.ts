@@ -50,59 +50,6 @@ function deriveBeneficiaryKey(slug: string): string {
   return parts.join("-");
 }
 
-export type UpdateFormState = { error?: string; ok?: true };
-
-export async function addCauseUpdateAction(_prev: UpdateFormState, formData: FormData): Promise<UpdateFormState> {
-  await requireAdmin();
-
-  const slug      = String(formData.get("slug") ?? "").trim();
-  const heading   = String(formData.get("heading") ?? "").trim();
-  const body      = String(formData.get("body") ?? "").trim();
-  const dateRaw   = String(formData.get("date") ?? "").trim();
-  const generateMcId = formData.get("generateMcId") === "on";
-
-  if (!slug) return { error: "Missing cause slug." };
-  if (!body) return { error: "Update body is required." };
-
-  const date = dateRaw ? new Date(dateRaw) : new Date();
-  if (Number.isNaN(date.getTime())) return { error: "Invalid date." };
-
-  const cause = await prisma.cause.findUnique({ where: { slug }, select: { id: true } });
-  if (!cause) return { error: "Cause not found." };
-
-  // The MCID allocator is "max+1 scan"; concurrent calls from the same FY can collide.
-  // Retry on the unique-constraint violation picks up the new max and proceeds.
-  await retryOnUniqueViolation(() => prisma.$transaction(async (tx) => {
-    const last = await tx.causeUpdate.findFirst({
-      where: { causeId: cause.id },
-      orderBy: { sortOrder: "desc" },
-      select: { sortOrder: true },
-    });
-    const nextOrder = (last?.sortOrder ?? -1) + 1;
-
-    const mcId = generateMcId ? await nextMcId(tx, date) : null;
-    const caption = composeCaption({ date, heading, mcId });
-
-    await tx.causeUpdate.create({
-      data: {
-        causeId: cause.id,
-        caption,
-        body,
-        sortOrder: nextOrder,
-        postedAt: date,
-        mcId,
-      },
-    });
-  }));
-
-  revalidatePath(`/admin/causes/${slug}`);
-  revalidatePath(`/donations/${slug}`);
-  revalidatePath("/current-causes");
-  revalidatePath("/success-stories");
-
-  return { ok: true };
-}
-
 export async function deleteCauseUpdateAction(formData: FormData) {
   await requireAdmin();
   const id = String(formData.get("id"));

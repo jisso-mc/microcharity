@@ -4,7 +4,6 @@ import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/session";
 import { inrShort } from "@/lib/format";
 import { setCauseStatusAction, deleteCauseUpdateAction } from "../actions";
-import AddUpdateForm from "./AddUpdateForm";
 import AnnouncementPanel from "./AnnouncementPanel";
 import { TEST_ANNOUNCEMENT_RECIPIENTS } from "@/lib/trust";
 
@@ -142,13 +141,9 @@ export default async function AdminCauseDetailPage({ params }: { params: Promise
         )}
       </div>
 
-      {/* Add a new update */}
-      <div>
-        <h2 className="font-display text-xl text-ink mb-4">Add a timeline entry</h2>
-        <div className="rounded-2xl bg-white border border-[var(--color-line)] p-6">
-          <AddUpdateForm slug={cause.slug} />
-        </div>
-      </div>
+      {/* Timeline entries are not added in-place anymore. Use Duplicate from the
+          Causes list to create a follow-up cause — that flow carries over prior
+          entries and lets you append a new one as part of a fresh cause. */}
 
       {/* Launch announcement (bulk donor mailer). Hidden for the support-microcharity
           cause itself — it'd loop. ADMIN-role only. */}
