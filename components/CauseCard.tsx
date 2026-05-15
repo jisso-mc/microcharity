@@ -9,6 +9,11 @@ export default function CauseCard({ beneficiary }: Props) {
   const pct = c.goal > 0 ? Math.min(100, Math.round((c.raised / c.goal) * 100)) : 0;
   const fmt = inrShort;
   const otherCount = beneficiary.campaigns.length - 1;
+  // datePosted is "YYYY-MM-DD" off the data layer — format as "Mon YYYY" so
+  // admins / donors can tell campaigns apart at a glance.
+  const launched = c.datePosted
+    ? new Date(c.datePosted).toLocaleDateString("en-IN", { month: "short", year: "numeric" })
+    : null;
 
   return (
     <article className="group flex flex-col rounded-[var(--radius-card)] border border-[var(--color-line)] bg-white overflow-hidden hover:shadow-lg hover:-translate-y-0.5 transition-all duration-300">
@@ -30,9 +35,14 @@ export default function CauseCard({ beneficiary }: Props) {
       </Link>
 
       <div className="p-5 flex-1 flex flex-col">
-        <h3 className="font-display text-lg leading-snug text-ink mb-2 group-hover:text-accent-600 transition">
+        <h3 className="font-display text-lg leading-snug text-ink mb-1 group-hover:text-accent-600 transition">
           <Link href={`/donations/${c.slug}`}>{c.title}</Link>
         </h3>
+        {launched && (
+          <p className="text-xs text-muted mb-2">
+            <span className="font-semibold uppercase tracking-wider">Started</span> {launched}
+          </p>
+        )}
         {c.summary && (
           <p className="text-sm text-muted leading-relaxed line-clamp-2 mb-4">{c.summary}</p>
         )}
