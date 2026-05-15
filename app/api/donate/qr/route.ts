@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextResponse, after } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { createUnverifiedDonation } from "@/lib/donations";
 import { sendDonationAck } from "@/lib/email";
@@ -8,6 +8,9 @@ import { uploadToBlob } from "@/lib/uploads";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+// Allow the post-response background work (Blob upload + ack email) to finish
+// without the function being recycled mid-call. Vercel caps Hobby at 60s.
+export const maxDuration = 60;
 
 // Donor-facing UPI / QR code donation submission.
 // Multipart: donor fields + an optional payment screenshot. Donor pays out of
@@ -47,38 +50,45 @@ export async function POST(req: Request) {
     });
 
     const screenshot = form.get("screenshot");
-    if (screenshot instanceof File && screenshot.size > 0) {
+    const hasScreenshot = screenshot instanceof File && screenshot.size > 0;
+
+    // Defer the two slow ops (Blob upload, SMTP send) to run after the response
+    // is sent. The donor sees the "thank you" screen instantly instead of waiting
+    // 3-4s. Failures here are logged but never block; the donation row is already
+    // persisted, and admin can resend the ack if needed.
+    after(async () => {
+      if (hasScreenshot) {
+        try {
+          const result = await uploadToBlob({
+            file: screenshot,
+            pathPrefix: `donations/${donation.id}`,
+            slot: "screenshot",
+          });
+          await prisma.donation.update({
+            where: { id: donation.id },
+            data: {
+              attachmentUrl: result.url,
+              attachmentMeta: { filename: result.filename, size: result.size, mimeType: result.mimeType } as never,
+            },
+          });
+        } catch (e) {
+          console.error("[donate/qr] screenshot upload failed (background)", e);
+        }
+      }
       try {
-        const result = await uploadToBlob({
-          file: screenshot,
-          pathPrefix: `donations/${donation.id}`,
-          slot: "screenshot",
-        });
-        await prisma.donation.update({
-          where: { id: donation.id },
-          data: {
-            attachmentUrl: result.url,
-            attachmentMeta: { filename: result.filename, size: result.size, mimeType: result.mimeType } as never,
-          },
+        await sendDonationAck({
+          donorName: parsed.name,
+          donorEmail: parsed.email,
+          causeTitle: cause.title,
+          donationDate: donation.createdAt,
+          amount: parsed.amount,
+          paymentMethod: "UPI / QR Code",
+          paymentId: donation.id.slice(-8).toUpperCase(),
         });
       } catch (e) {
-        console.error("[donate/qr] screenshot upload failed (continuing)", e);
+        console.error("[donate/qr] ack email failed (background)", e);
       }
-    }
-
-    try {
-      await sendDonationAck({
-        donorName: parsed.name,
-        donorEmail: parsed.email,
-        causeTitle: cause.title,
-        donationDate: donation.createdAt,
-        amount: parsed.amount,
-        paymentMethod: "UPI / QR Code",
-        paymentId: donation.id.slice(-8).toUpperCase(),
-      });
-    } catch (e) {
-      console.error("[donate/qr] ack email failed", e);
-    }
+    });
 
     return NextResponse.json({ ok: true, donationId: donation.id });
   } catch (e) {

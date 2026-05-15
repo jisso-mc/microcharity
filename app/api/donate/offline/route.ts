@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextResponse, after } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { createUnverifiedDonation } from "@/lib/donations";
 import { sendDonationAck } from "@/lib/email";
@@ -8,6 +8,7 @@ import { uploadToBlob } from "@/lib/uploads";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+export const maxDuration = 60;
 
 // Donor-facing offline donation submission.
 // - Multipart: donor fields + an optional payment screenshot.
@@ -49,42 +50,45 @@ export async function POST(req: Request) {
       paymentDate: parsed.paymentDate,
     });
 
-    // Optional payment screenshot. Uploaded to Vercel Blob after the row exists
-    // so we can use the donation id as the key prefix. Failure here is logged but
-    // not fatal — the donation itself is already saved.
     const screenshot = form.get("screenshot");
-    if (screenshot instanceof File && screenshot.size > 0) {
+    const hasScreenshot = screenshot instanceof File && screenshot.size > 0;
+
+    // Defer the two slow ops (Blob upload, SMTP send) so the donor's response
+    // returns immediately. Both are non-critical for the donor flow — the row is
+    // already saved and admin can resend the ack if SMTP hiccups.
+    after(async () => {
+      if (hasScreenshot) {
+        try {
+          const result = await uploadToBlob({
+            file: screenshot,
+            pathPrefix: `donations/${donation.id}`,
+            slot: "screenshot",
+          });
+          await prisma.donation.update({
+            where: { id: donation.id },
+            data: {
+              attachmentUrl: result.url,
+              attachmentMeta: { filename: result.filename, size: result.size, mimeType: result.mimeType } as never,
+            },
+          });
+        } catch (e) {
+          console.error("[donate/offline] screenshot upload failed (background)", e);
+        }
+      }
       try {
-        const result = await uploadToBlob({
-          file: screenshot,
-          pathPrefix: `donations/${donation.id}`,
-          slot: "screenshot",
-        });
-        await prisma.donation.update({
-          where: { id: donation.id },
-          data: {
-            attachmentUrl: result.url,
-            attachmentMeta: { filename: result.filename, size: result.size, mimeType: result.mimeType } as never,
-          },
+        await sendDonationAck({
+          donorName: parsed.name,
+          donorEmail: parsed.email,
+          causeTitle: cause.title,
+          donationDate: donation.createdAt,
+          amount: parsed.amount,
+          paymentMethod: "Offline Donation",
+          paymentId: donation.id.slice(-8).toUpperCase(),
         });
       } catch (e) {
-        console.error("[donate/offline] screenshot upload failed (continuing)", e);
+        console.error("[donate/offline] ack email failed (background)", e);
       }
-    }
-
-    try {
-      await sendDonationAck({
-        donorName: parsed.name,
-        donorEmail: parsed.email,
-        causeTitle: cause.title,
-        donationDate: donation.createdAt,
-        amount: parsed.amount,
-        paymentMethod: "Offline Donation",
-        paymentId: donation.id.slice(-8).toUpperCase(),
-      });
-    } catch (e) {
-      console.error("[donate/offline] ack email failed", e);
-    }
+    });
 
     return NextResponse.json({ ok: true, donationId: donation.id });
   } catch (e) {
