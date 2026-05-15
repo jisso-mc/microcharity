@@ -39,9 +39,7 @@ export default function CauseCard({ beneficiary }: Props) {
           <Link href={`/donations/${c.slug}`}>{c.title}</Link>
         </h3>
         {launched && (
-          <p className="text-xs text-muted mb-2">
-            <span className="font-semibold uppercase tracking-wider">Started</span> {launched}
-          </p>
+          <p className="text-xs text-muted mb-2">{launched}</p>
         )}
         {c.summary && (
           <p className="text-sm text-muted leading-relaxed line-clamp-2 mb-4">{c.summary}</p>
