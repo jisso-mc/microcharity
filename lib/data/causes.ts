@@ -32,6 +32,48 @@ function mapStatus(s: string): "active" | "closed" {
   return s === "PUBLISHED" ? "active" : "closed";
 }
 
+// Map of accepted month names (long + short, lowercase) → 1-based month number.
+const MONTHS: Record<string, number> = {
+  jan: 1, january: 1, feb: 2, february: 2, mar: 3, march: 3, apr: 4, april: 4,
+  may: 5, jun: 6, june: 6, jul: 7, july: 7, aug: 8, august: 8,
+  sep: 9, sept: 9, september: 9, oct: 10, october: 10, nov: 11, november: 11, dec: 12, december: 12,
+};
+
+// Extract a date from a CauseUpdate caption. Handles the variants seen in
+// the imported timeline entries:
+//
+//   "June 30, 2017 - …"      → 2017-06-30
+//   "Mar 18, 2019 - …"       → 2019-03-18
+//   "10-Nov-2020 - …"        → 2020-11-10
+//   "1-Nov-2021 - …"         → 2021-11-01
+//   "September 12, 2024 - …" → 2024-09-12
+//
+// Returns "" when no parseable date is present (e.g. "Fund Raising Closed").
+// The output is an ISO-8601 date string so lexicographic comparison sorts
+// chronologically.
+function parseCaptionDate(caption: string): string {
+  if (!caption) return "";
+  // Form A: "Mon D, YYYY" or "Month DD, YYYY". Capture month name + day + year.
+  const a = caption.match(/\b([A-Za-z]{3,9})\s+(\d{1,2}),\s*(\d{4})\b/);
+  if (a) {
+    const mm = MONTHS[a[1].toLowerCase()];
+    if (mm) return toIso(Number(a[3]), mm, Number(a[2]));
+  }
+  // Form B: "D-Mon-YYYY" or "DD-Month-YYYY" with hyphen separators.
+  const b = caption.match(/\b(\d{1,2})[-\s]([A-Za-z]{3,9})[-\s](\d{4})\b/);
+  if (b) {
+    const mm = MONTHS[b[2].toLowerCase()];
+    if (mm) return toIso(Number(b[3]), mm, Number(b[1]));
+  }
+  return "";
+}
+
+function toIso(y: number, m: number, d: number): string {
+  if (!y || !m || !d) return "";
+  if (m < 1 || m > 12 || d < 1 || d > 31) return "";
+  return `${y.toString().padStart(4, "0")}-${m.toString().padStart(2, "0")}-${d.toString().padStart(2, "0")}`;
+}
+
 /**
  * Fetch all PUBLISHED + CLOSED causes from the database, grouped by beneficiaryKey
  * so multiple campaigns for the same person nest together. DRAFT causes are hidden
@@ -59,6 +101,21 @@ async function loadGrouped(): Promise<Beneficiary[]> {
       };
       groups.set(key, g);
     }
+    // The Cause.startDate captures when the campaign first launched, but
+    // legacy WordPress causes often ran for years and we want the card to
+    // reflect the most recent activity — admins were entering successive
+    // fund requests as timeline entries with dates baked into the caption.
+    // Parse those out and take the latest as the display date when it's
+    // newer than startDate. Falls back to startDate (or createdAt) when no
+    // caption yields a parseable date.
+    const startIso = c.startDate?.toISOString().slice(0, 10) ?? c.createdAt.toISOString().slice(0, 10);
+    let latestCaptionIso = "";
+    for (const u of c.updates) {
+      const iso = parseCaptionDate(u.caption ?? "");
+      if (iso && iso > latestCaptionIso) latestCaptionIso = iso;
+    }
+    const datePosted = latestCaptionIso > startIso ? latestCaptionIso : startIso;
+
     g.campaigns.push({
       url: `/donations/${c.slug}`,
       slug: c.slug,
@@ -68,7 +125,7 @@ async function loadGrouped(): Promise<Beneficiary[]> {
       status: mapStatus(c.status),
       image: c.featuredImage ?? "",
       summary: c.summary ?? "",
-      datePosted: c.startDate?.toISOString().slice(0, 10) ?? c.createdAt.toISOString().slice(0, 10),
+      datePosted,
       updates: c.updates.map((u) => ({ caption: u.caption ?? "", body: u.body })),
     });
     g.totalRaised += c.raisedAmount;
