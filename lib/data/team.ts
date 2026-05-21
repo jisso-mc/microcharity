@@ -79,7 +79,7 @@ export const team: TeamMember[] = [
     photo: "/team/melvin.jpg",
     name: "Melvin & Jincy",
     location: "Austin, Texas",
-    bio: "Melvin and Jincy live in Austin with their four children — Felix, Sarah, Carol and Laura. Melvin is a Senior Manager and agile consultant at Mphasis; Jincy is an IT professional turned home maker.",
+    bio: "Melvin and Jincy live in Austin with their four children — Felix, Sarah, Carol and Laura. Melvin is a Senior Manager and agile consultant at Mphasis; Jincy is an IT professional turned homemaker.",
   },
   {
     photo: "/team/seby.jpg",
