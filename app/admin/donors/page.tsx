@@ -7,7 +7,6 @@ export const dynamic = "force-dynamic";
 export default async function DonorsAdminPage() {
   const donors = await prisma.donor.findMany({
     orderBy: { lastDonationAt: "desc" },
-    take: 100,
   });
 
   return (
