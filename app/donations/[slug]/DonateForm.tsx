@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import Script from "next/script";
 import { inrShort as fmt } from "@/lib/format";
 
@@ -21,6 +22,7 @@ interface RazorpayResponse {
 }
 
 export default function DonateForm({ slug }: { slug: string }) {
+  const router = useRouter();
   const [method, setMethod] = useState<Method>("razorpay");
   const [amount, setAmount] = useState<number | "">("");
   const [busy, setBusy] = useState(false);
@@ -105,6 +107,11 @@ export default function DonateForm({ slug }: { slug: string }) {
           });
           if (!verifyRes.ok) throw new Error("Could not verify payment");
           setDone({ amount: d.amount, name: d.name, method: "razorpay" });
+          // The verify route revalidates "/" and "/donations/[slug]" — calling
+          // router.refresh() now pulls the freshly-rendered totals into the
+          // already-mounted server components so the donor sees their amount
+          // reflected without having to reload.
+          router.refresh();
         } catch {
           setMsg("Payment received — confirmation is taking a moment. You'll receive a receipt by email shortly.");
         } finally {
