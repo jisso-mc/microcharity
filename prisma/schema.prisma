@@ -344,6 +344,12 @@ model CauseAnnouncement {
   totalRecipients Int                      @default(0)
   successCount    Int                      @default(0)
   failureCount    Int                      @default(0)
+  // Engagement counters — incremented atomically the first time each recipient
+  // pings the open-tracking pixel or hits the click-tracking redirect. Repeat
+  // opens / clicks from the same recipient don't bump these; per-recipient
+  // detail lives on AnnouncementRecipient (openedAt, clickCount).
+  openCount       Int                      @default(0)
+  clickCount      Int                      @default(0)
 
   // True when this was a test send (recipient list is just the sending admin's
   // email instead of every opted-in donor). Kept in history so admins can tell
@@ -376,6 +382,14 @@ model AnnouncementRecipient {
   status          AnnouncementRecipientStatus  @default(PENDING)
   error           String?
   sentAt          DateTime?
+
+  // Engagement tracking. openedAt is set the first time the tracking pixel
+  // hits /api/announcement/open/[id]; subsequent loads are ignored at the
+  // CauseAnnouncement.openCount level but timestamps remain accurate to the
+  // first open. clickCount counts every click; firstClickedAt only the first.
+  openedAt        DateTime?
+  firstClickedAt  DateTime?
+  clickCount      Int                          @default(0)
 
   // Per-recipient HMAC token so the unsubscribe link in one donor's email can't be
   // used to unsubscribe another donor. Deterministic per email (HMAC(email, secret))

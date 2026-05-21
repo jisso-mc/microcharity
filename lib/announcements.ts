@@ -63,12 +63,33 @@ export function renderAnnouncementHtml(opts: {
   origin: string;
   recipientEmail: string;
   unsubscribeToken: string;
+  // recipientId is the AnnouncementRecipient row id; absent only for
+  // unit-test renders. When present we wrap CTAs with the click-tracker
+  // and append the open-tracking pixel.
+  recipientId?: string;
 }): string {
   const causeUrl = `${opts.origin}/donations/${opts.cause.slug}`;
   const supportUrl = `${opts.origin}/donations/support-microcharity`;
   const unsubUrl = `${opts.origin}/unsubscribe?email=${encodeURIComponent(opts.recipientEmail)}&token=${opts.unsubscribeToken}`;
   const logoUrl = `${opts.origin}/logo.jpg`;
   const mailerImageUrl = `${opts.origin}/mailer-image.jpg`;
+  // Wrap clickable destinations in the click-tracker. Unsubscribe link is
+  // intentionally NOT wrapped — donors hitting it shouldn't get counted as
+  // engaged clicks (it's an opt-out, not an engagement). Image src URLs
+  // (logo, mailer banner) also stay direct so they're cacheable.
+  const track = (url: string) =>
+    opts.recipientId
+      ? `${opts.origin}/api/announcement/click/${opts.recipientId}?to=${encodeURIComponent(url)}`
+      : url;
+  const causeTrack = track(causeUrl);
+  const supportTrack = track(supportUrl);
+  // The open-tracking pixel. Placed last in the body so the rest of the
+  // email is fully rendered before clients fetch the image (some lazy
+  // load by position). 1×1 transparent GIF; display:block prevents the
+  // tiny anchor-line artifact in some webmail clients.
+  const openPixel = opts.recipientId
+    ? `<img src="${opts.origin}/api/announcement/open/${opts.recipientId}" width="1" height="1" alt="" style="display:block;border:0;width:1px;height:1px;" />`
+    : "";
 
   // Body of the cause section: the new timeline entry text followed by a small
   // pointer back to the full cause page. Paragraphs in the entry body are
@@ -97,24 +118,24 @@ export function renderAnnouncementHtml(opts: {
         <!-- Cause: image → title → description → CTA, in that order. -->
         <tr><td style="padding:20px 24px 0;">
           ${opts.cause.featuredImage
-            ? `<p style="margin:0 0 16px;"><a href="${causeUrl}" style="display:block;"><img src="${opts.cause.featuredImage}" alt="${esc(opts.cause.title)}" style="max-width:100%;height:auto;display:block;border:0;border-radius:8px;" /></a></p>`
+            ? `<p style="margin:0 0 16px;"><a href="${causeTrack}" style="display:block;"><img src="${opts.cause.featuredImage}" alt="${esc(opts.cause.title)}" style="max-width:100%;height:auto;display:block;border:0;border-radius:8px;" /></a></p>`
             : ""
           }
           <h2 style="margin:0 0 12px;font-size:22px;font-weight:600;line-height:1.3;">
-            <a href="${causeUrl}" style="color:#2a7fb8;text-decoration:underline;">${esc(opts.cause.title)}</a>
+            <a href="${causeTrack}" style="color:#2a7fb8;text-decoration:underline;">${esc(opts.cause.title)}</a>
           </h2>
           <p style="margin:0 0 16px;font-size:14px;color:#3b3838;line-height:1.6;">
             ${summaryHtml}
           </p>
           <p style="margin:0 0 24px;">
-            <a href="${causeUrl}" style="display:inline-block;background:#cc2222;color:#ffffff;text-decoration:none;font-weight:600;padding:12px 28px;border-radius:6px;font-size:15px;">Donate Now</a>
+            <a href="${causeTrack}" style="display:inline-block;background:#cc2222;color:#ffffff;text-decoration:none;font-weight:600;padding:12px 28px;border-radius:6px;font-size:15px;">Donate Now</a>
           </p>
         </td></tr>
 
         <!-- Support MicroCharity boilerplate -->
         <tr><td style="padding:8px 24px 0;border-top:1px solid #e7e3df;">
           <h2 style="margin:18px 0 12px;font-size:20px;font-weight:600;color:#2a7fb8;">
-            <a href="${supportUrl}" style="color:#2a7fb8;text-decoration:underline;">Support MicroCharity</a>
+            <a href="${supportTrack}" style="color:#2a7fb8;text-decoration:underline;">Support MicroCharity</a>
           </h2>
           <p style="margin:0 0 16px;font-size:14px;color:#3b3838;line-height:1.6;">
             All our administrative expenses are absorbed by MicroCharity volunteers. That gives us
@@ -122,7 +143,7 @@ export function renderAnnouncementHtml(opts: {
             the needy. Would you like to donate towards our running expenses? Please do!
           </p>
           <p style="margin:0 0 24px;">
-            <a href="${supportUrl}" style="display:inline-block;background:#cc2222;color:#ffffff;text-decoration:none;font-weight:600;padding:12px 28px;border-radius:6px;font-size:15px;">Donate Now</a>
+            <a href="${supportTrack}" style="display:inline-block;background:#cc2222;color:#ffffff;text-decoration:none;font-weight:600;padding:12px 28px;border-radius:6px;font-size:15px;">Donate Now</a>
           </p>
         </td></tr>
 
@@ -149,6 +170,7 @@ export function renderAnnouncementHtml(opts: {
       </table>
     </td></tr>
   </table>
+  ${openPixel}
 </body></html>`;
 }
 
@@ -301,7 +323,7 @@ export async function processNextBatch(announcementId: string, opts: { origin: s
   // 50/min target and avoids hitting per-second SMTP throughput caps.
   for (const r of batch) {
     try {
-      const html = renderAnnouncementHtml({ cause: causeInput, origin: opts.origin, recipientEmail: r.donorEmail, unsubscribeToken: r.unsubscribeToken });
+      const html = renderAnnouncementHtml({ cause: causeInput, origin: opts.origin, recipientEmail: r.donorEmail, unsubscribeToken: r.unsubscribeToken, recipientId: r.id });
       const text = renderAnnouncementText({ cause: causeInput, origin: opts.origin, recipientEmail: r.donorEmail, unsubscribeToken: r.unsubscribeToken });
       const result = await sendEmail({ to: r.donorEmail, subject: safeHeader(a.subject), html, text });
       if (result.ok) {
@@ -377,6 +399,8 @@ export const ANNOUNCEMENT_PROGRESS_SELECT = {
   totalRecipients: true,
   successCount: true,
   failureCount: true,
+  openCount: true,
+  clickCount: true,
   status: true,
   isTest: true,
   startedAt: true,

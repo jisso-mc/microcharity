@@ -8,6 +8,8 @@ type AnnouncementProgress = {
   totalRecipients: number;
   successCount: number;
   failureCount: number;
+  openCount: number;
+  clickCount: number;
   isTest: boolean;
   startedAt: string;
   completedAt: string | null;
@@ -205,6 +207,11 @@ function ProgressRow({ row, highlight }: { row: AnnouncementProgress; highlight:
     : row.status === "SENDING" ? `Sending… ${done} / ${row.totalRecipients}`
     : row.status === "COMPLETED" ? `Completed · ${row.successCount} delivered${row.failureCount > 0 ? ` · ${row.failureCount} failed` : ""}`
     : "Cancelled";
+  // Open / click rates are computed against the number we actually delivered,
+  // not totalRecipients, so failed sends don't drag the percentage down.
+  const delivered = row.successCount;
+  const openPct = delivered > 0 ? Math.round((row.openCount / delivered) * 100) : 0;
+  const clickPct = delivered > 0 ? Math.round((row.clickCount / delivered) * 100) : 0;
   return (
     <div className={`rounded-lg border p-3 ${highlight ? "border-accent-600 bg-accent-50/30" : "border-[var(--color-line)] bg-white"}`}>
       <div className="flex items-baseline justify-between gap-3">
@@ -222,6 +229,12 @@ function ProgressRow({ row, highlight }: { row: AnnouncementProgress; highlight:
         <div className="h-full bg-accent-600 rounded-full transition-all" style={{ width: `${pct}%` }} />
       </div>
       <p className="text-xs text-muted mt-1.5">{statusText}</p>
+      {row.status === "COMPLETED" && delivered > 0 && (
+        <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted">
+          <span><strong className="text-ink">{row.openCount}</strong> opened ({openPct}%)</span>
+          <span><strong className="text-ink">{row.clickCount}</strong> clicked ({clickPct}%)</span>
+        </div>
+      )}
     </div>
   );
 }
