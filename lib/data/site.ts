@@ -14,9 +14,11 @@ export const site = {
     youtube: "",
   },
   nav: [
+    // Current Causes leads the header — it's the page that converts a visitor
+    // into a donor, so it should be the first hop everywhere it appears.
+    { label: "Current Causes", href: "/current-causes" },
     { label: "Who We Are",     href: "/who-we-are" },
     { label: "How We Work",    href: "/how-we-work" },
-    { label: "Current Causes", href: "/current-causes" },
     { label: "Refer a Cause",  href: "/refer-a-cause" },
     { label: "Financials",     href: "/legal-financial" },
     { label: "Contact",        href: "/contact-us" },
