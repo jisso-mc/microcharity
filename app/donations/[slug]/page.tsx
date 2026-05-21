@@ -17,15 +17,20 @@ function renderParagraph(text: string): React.ReactNode {
   while ((m = re.exec(text)) !== null) {
     if (m.index > last) parts.push(<Fragment key={key++}>{text.slice(last, m.index)}</Fragment>);
     const [, label, url] = m;
-    // Same-origin links stay client-side via next/link; external open in a new
-    // tab. Same-host detection is permissive — anything microcharity.com is ours.
-    const isInternal = /^https?:\/\/(www\.)?microcharity\.(com|vercel\.app)/.test(url);
-    if (isInternal) {
-      const path = url.replace(/^https?:\/\/[^/]+/, "") || "/";
-      parts.push(<Link key={key++} href={path} className="text-accent-600 hover:text-accent-700 underline underline-offset-2">{label}</Link>);
-    } else {
-      parts.push(<a key={key++} href={url} target="_blank" rel="noopener noreferrer" className="text-accent-600 hover:text-accent-700 underline underline-offset-2">{label}</a>);
-    }
+    // Inline body links always open in a new tab — even if they point back
+    // at microcharity.com — so the reader doesn't lose their place on the
+    // current cause page when they tap a "see related cause" hint.
+    parts.push(
+      <a
+        key={key++}
+        href={url}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="text-accent-600 hover:text-accent-700 underline underline-offset-2"
+      >
+        {label}
+      </a>
+    );
     last = m.index + m[0].length;
   }
   if (last < text.length) parts.push(<Fragment key={key++}>{text.slice(last)}</Fragment>);
