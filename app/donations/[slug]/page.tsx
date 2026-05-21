@@ -126,7 +126,7 @@ export default async function CausePage({ params }: { params: Promise<{ slug: st
                 <p className="text-xs uppercase tracking-wider font-semibold text-muted mb-3">Explore more</p>
                 <ul className="grid sm:grid-cols-2 gap-3 text-sm">
                   <li><Link href="/refer-a-cause" className="text-accent-600 hover:text-accent-700 font-semibold">Refer a cause →</Link></li>
-                  <li><Link href="/current-causes" className="text-accent-600 hover:text-accent-700 font-semibold">Current causes →</Link></li>
+                  <li><Link href="/current-causes" className="text-accent-600 hover:text-accent-700 font-semibold">Causes supported →</Link></li>
                   <li><Link href="/who-we-are" className="text-accent-600 hover:text-accent-700 font-semibold">Who we are →</Link></li>
                   <li><Link href="/how-we-work" className="text-accent-600 hover:text-accent-700 font-semibold">How we work →</Link></li>
                   <li><Link href="/success-stories" className="text-accent-600 hover:text-accent-700 font-semibold">Success stories →</Link></li>

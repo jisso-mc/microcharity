@@ -83,7 +83,7 @@ export default function Footer() {
           <ul className="space-y-2 text-sm">
             <li><Link href="/who-we-are" className="hover:text-accent-600">Who We Are</Link></li>
             <li><Link href="/how-we-work" className="hover:text-accent-600">How We Work</Link></li>
-            <li><Link href="/current-causes" className="hover:text-accent-600">Current Causes</Link></li>
+            <li><Link href="/current-causes" className="hover:text-accent-600">Causes Supported</Link></li>
             <li><Link href="/success-stories" className="hover:text-accent-600">Success Stories</Link></li>
             <li><Link href="/refer-a-cause" className="hover:text-accent-600">Refer a Cause</Link></li>
           </ul>

@@ -2,7 +2,7 @@ import PageHero from "@/components/PageHero";
 import CauseCard from "@/components/CauseCard";
 import { getActiveBeneficiaries, getClosedBeneficiaries } from "@/lib/data/causes";
 
-export const metadata = { title: "Current Causes" };
+export const metadata = { title: "Causes Supported" };
 export const revalidate = 60;
 
 export default async function CurrentCausesPage() {
