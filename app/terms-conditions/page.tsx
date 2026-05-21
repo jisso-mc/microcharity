@@ -9,7 +9,7 @@ export default function TermsPage() {
       <div className="container-page py-12 md:py-16">
         <div className="prose-mc">
           <h2>Key terms</h2>
-          <p>The term <strong>&apos;User&apos;</strong> or <strong>&apos;You&apos;</strong> refers to the person who browses the site. The term <strong>&apos;MicroCharity&apos;</strong> refers to &quot;MicroCharity Trust&quot;, a charitable trust having its office at 112, West Village, Kodipalaya, Kengeri, Bangalore – 560060. The term <strong>&apos;Site&apos;</strong> refers to www.microcharity.com, owned and monitored by MicroCharity.</p>
+          <p>The term <strong>&apos;User&apos;</strong> or <strong>&apos;You&apos;</strong> refers to the person who browses the site. The term <strong>&apos;MicroCharity&apos;</strong> refers to &quot;MicroCharity Trust&quot;, a charitable trust having its office at 112, West Village, Kodipalya, Kengeri, Bangalore – 560060. The term <strong>&apos;Site&apos;</strong> refers to www.microcharity.com, owned and monitored by MicroCharity.</p>
 
           <h2>Acceptance of terms</h2>
           <p>This Site is offered to you conditioned on your acceptance without modification of the terms, conditions, and notices contained herein. By using the Site, you agree to follow and be bound by these terms concerning your use of the Site. MicroCharity may revise the Terms of Use at any time without notice.</p>
