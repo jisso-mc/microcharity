@@ -39,6 +39,17 @@ const nextConfig = {
     ],
   },
 
+  // 301 redirects for cause URLs whose slugs were renamed. The old slugs
+  // came from the legacy WordPress import (raw post IDs) and were renamed
+  // to descriptive slugs; keeping the redirects means any external links to
+  // the numeric URLs still resolve.
+  async redirects() {
+    return [
+      { source: "/donations/3907", destination: "/donations/college-fee-for-merlina", permanent: true },
+      { source: "/donations/4293", destination: "/donations/kidney-transplant-for-josmy", permanent: true },
+    ];
+  },
+
   // Security headers applied to every response. CSP intentionally omitted for now —
   // Razorpay's checkout widget and Cloudflare Turnstile each pull scripts, frames,
   // and stylesheets from their own origins, so a non-trivial CSP requires per-route
