@@ -2,7 +2,7 @@ import Link from "next/link";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { inrShort } from "@/lib/format";
-import { setCauseStatusAction } from "./actions";
+import CauseStatusButton from "./CauseStatusButton";
 
 export const metadata = { title: "Causes — Admin" };
 export const dynamic = "force-dynamic";
@@ -175,27 +175,9 @@ export default async function CausesAdminPage({ searchParams }: { searchParams: 
                   </td>
                   <td className="px-4 py-3 text-right whitespace-nowrap">
                     <div className="inline-flex items-center gap-x-3 gap-y-1 flex-wrap justify-end">
-                      {c.status === "PUBLISHED" && (
-                        <form action={setCauseStatusAction}>
-                          <input type="hidden" name="id" value={c.id} />
-                          <input type="hidden" name="status" value="CLOSED" />
-                          <button type="submit" className="text-xs font-semibold text-accent-600 hover:text-accent-700">Close</button>
-                        </form>
-                      )}
-                      {c.status === "CLOSED" && (
-                        <form action={setCauseStatusAction}>
-                          <input type="hidden" name="id" value={c.id} />
-                          <input type="hidden" name="status" value="PUBLISHED" />
-                          <button type="submit" className="text-xs font-semibold text-muted hover:text-ink">Re-open</button>
-                        </form>
-                      )}
-                      {c.status === "DRAFT" && (
-                        <form action={setCauseStatusAction}>
-                          <input type="hidden" name="id" value={c.id} />
-                          <input type="hidden" name="status" value="PUBLISHED" />
-                          <button type="submit" className="text-xs font-semibold text-accent-600 hover:text-accent-700">Publish</button>
-                        </form>
-                      )}
+                      {c.status === "PUBLISHED" && <CauseStatusButton causeId={c.id} variant="close" />}
+                      {c.status === "CLOSED"    && <CauseStatusButton causeId={c.id} variant="reopen" />}
+                      {c.status === "DRAFT"     && <CauseStatusButton causeId={c.id} variant="publish" />}
                       <Link href={`/admin/causes/new?from=${encodeURIComponent(c.slug)}`} className="text-xs font-semibold text-ink hover:text-accent-600" title="Create a follow-up campaign with these details pre-filled">
                         Duplicate
                       </Link>

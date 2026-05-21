@@ -3,7 +3,8 @@ import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/session";
 import { inrShort } from "@/lib/format";
-import { setCauseStatusAction, deleteCauseUpdateAction } from "../actions";
+import { deleteCauseUpdateAction } from "../actions";
+import CauseStatusButton from "../CauseStatusButton";
 import AnnouncementPanel from "./AnnouncementPanel";
 import { TEST_ANNOUNCEMENT_RECIPIENTS } from "@/lib/trust";
 
@@ -74,27 +75,9 @@ export default async function AdminCauseDetailPage({ params }: { params: Promise
           <p className="text-xs uppercase tracking-wider text-muted font-semibold mb-1">Status</p>
           <p className="font-display text-xl text-ink">{STATUS_LABEL[cause.status]}</p>
           <div className="mt-3 flex items-center gap-3">
-            {cause.status === "PUBLISHED" && (
-              <form action={setCauseStatusAction}>
-                <input type="hidden" name="id" value={cause.id} />
-                <input type="hidden" name="status" value="CLOSED" />
-                <button type="submit" className="text-xs font-semibold text-accent-600 hover:text-accent-700">Close</button>
-              </form>
-            )}
-            {cause.status === "CLOSED" && (
-              <form action={setCauseStatusAction}>
-                <input type="hidden" name="id" value={cause.id} />
-                <input type="hidden" name="status" value="PUBLISHED" />
-                <button type="submit" className="text-xs font-semibold text-muted hover:text-ink">Re-open</button>
-              </form>
-            )}
-            {cause.status === "DRAFT" && (
-              <form action={setCauseStatusAction}>
-                <input type="hidden" name="id" value={cause.id} />
-                <input type="hidden" name="status" value="PUBLISHED" />
-                <button type="submit" className="text-xs font-semibold text-accent-600 hover:text-accent-700">Publish</button>
-              </form>
-            )}
+            {cause.status === "PUBLISHED" && <CauseStatusButton causeId={cause.id} variant="close" />}
+            {cause.status === "CLOSED"    && <CauseStatusButton causeId={cause.id} variant="reopen" />}
+            {cause.status === "DRAFT"     && <CauseStatusButton causeId={cause.id} variant="publish" />}
           </div>
         </div>
         <div>
