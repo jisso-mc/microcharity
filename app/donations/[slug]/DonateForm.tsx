@@ -197,7 +197,7 @@ export default function DonateForm({ slug }: { slug: string }) {
             type="number"
             name="amount"
             min="100"
-            step="100"
+            step="1"
             required
             value={amount}
             onChange={(e) => setAmount(e.target.value === "" ? "" : Number(e.target.value))}
