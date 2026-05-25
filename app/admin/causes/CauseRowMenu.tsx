@@ -76,14 +76,19 @@ export default function CauseRowMenu({
           role="menu"
           className="absolute right-0 z-20 mt-1 w-44 origin-top-right rounded-xl border border-[var(--color-line)] bg-white shadow-lg ring-1 ring-black/5 py-1 text-sm"
         >
-          {/* Close / Re-open / Publish — wraps the existing status button
-              inside a menu row so its label and in-flight spinner still
-              come along for free. The button's own onClick won't close
-              the menu (it submits a form action); rely on the navigation
-              that follows, plus we toggle open=false on mousedown of any
-              child via the bubbling document listener. */}
+          {/* Close / Re-open / Publish — wraps the existing status button.
+              Critically, we do NOT close the menu on click here: the
+              earlier setOpen(false) was firing on click bubble from the
+              submit button, unmounting the form tree before React had a
+              chance to dispatch the server action's fetch, so the click
+              silently dropped on the floor and the cause never flipped.
+              Now the menu stays open through the action, the button's
+              own useFormStatus spinner shows the in-flight state, and
+              the page revalidation re-renders the menu with the new
+              CauseStatusButton variant (Close ↔ Re-open). The user
+              closes manually (outside click / Escape). */}
           {statusVariant && (
-            <div role="menuitem" className="px-3 py-2 hover:bg-[var(--color-soft)]" onClick={() => setOpen(false)}>
+            <div role="menuitem" className="px-3 py-2 hover:bg-[var(--color-soft)]">
               <CauseStatusButton causeId={causeId} variant={statusVariant} />
             </div>
           )}
