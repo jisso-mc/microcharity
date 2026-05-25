@@ -9,6 +9,7 @@ import { buildReceiptPdf, nextReceiptNumber } from "./receipt";
 import { sendDonationReceipt80G, sendDonationAck } from "./email";
 import { encryptPii, decryptPiiSafe } from "./crypto";
 import { retryOnUniqueViolation } from "./retry";
+import { formatPostedDate } from "./mcid";
 
 export type CreateManualInput = {
   causeId: string;
@@ -224,6 +225,57 @@ export async function approveDonation(donationId: string, approverId: string | n
         ...(isNewDonorForCause ? { donorCount: { increment: 1 } } : {}),
       },
     });
+
+    // Auto-close the cause when this donation pushes it to / past its goal.
+    // Behaviour (per Jisso):
+    //   * Skips if cause is already CLOSED — admin cancellation wins over
+    //     a late-arriving donation that nudges over the line.
+    //   * Skips if any existing timeline entry already says "fund raising
+    //     closed" (case/whitespace-insensitive) — avoids duplicating an
+    //     entry an admin added manually.
+    //   * Skips if goalAmount === 0 — informational causes (e.g. JCI
+    //     Nalukody) have no fund-raising target.
+    //
+    // When all guards pass we append a "Mon D, YYYY - Fund Raising Closed"
+    // timeline entry AND flip status to CLOSED in the same transaction, so
+    // the public cause page (revalidated by the caller) reflects both
+    // changes together.
+    const causeNow = await tx.cause.findUniqueOrThrow({
+      where: { id: d.causeId },
+      select: {
+        slug: true,
+        raisedAmount: true,
+        goalAmount: true,
+        status: true,
+        updates: { select: { caption: true } },
+      },
+    });
+    const goalReached =
+      causeNow.goalAmount > 0
+      && causeNow.raisedAmount >= causeNow.goalAmount
+      && causeNow.status !== "CLOSED"
+      && !causeNow.updates.some((u) => /fund\s+raising\s+closed/i.test(u.caption ?? ""));
+    if (goalReached) {
+      const last = await tx.causeUpdate.findFirst({
+        where: { causeId: d.causeId },
+        orderBy: { sortOrder: "desc" },
+        select: { sortOrder: true },
+      });
+      const today = new Date();
+      await tx.causeUpdate.create({
+        data: {
+          causeId: d.causeId,
+          caption: `${formatPostedDate(today)} - Fund Raising Closed`,
+          body: "Fund raising closed for this cause.",
+          sortOrder: (last?.sortOrder ?? -1) + 1,
+          postedAt: today,
+        },
+      });
+      await tx.cause.update({
+        where: { id: d.causeId },
+        data: { status: "CLOSED" },
+      });
+    }
 
     if (d.donorId) {
       const donor = await tx.donor.findUnique({ where: { id: d.donorId } });
