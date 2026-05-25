@@ -2,7 +2,7 @@ import Link from "next/link";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { inrShort } from "@/lib/format";
-import CauseStatusButton from "./CauseStatusButton";
+import CauseRowMenu from "./CauseRowMenu";
 
 export const metadata = { title: "Causes — Admin" };
 export const dynamic = "force-dynamic";
@@ -147,7 +147,7 @@ export default async function CausesAdminPage({ searchParams }: { searchParams: 
               <th className="text-left font-semibold px-3 py-3 w-[7rem]">Launched</th>
               <th className="text-left font-semibold px-3 py-3 w-[7rem]">Status</th>
               <th className="text-right font-semibold px-3 py-3 w-[8rem]">Raised / Goal</th>
-              <th className="text-right font-semibold px-4 py-3 w-[14rem]">Actions</th>
+              <th className="text-right font-semibold px-4 py-3 w-16">Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -174,17 +174,16 @@ export default async function CausesAdminPage({ searchParams }: { searchParams: 
                     <span className="block text-xs text-muted">of {inrShort(c.goalAmount)} · {pct}%</span>
                   </td>
                   <td className="px-4 py-3 text-right whitespace-nowrap">
-                    <div className="inline-flex items-center gap-x-3 gap-y-1 flex-wrap justify-end">
-                      {c.status === "PUBLISHED" && <CauseStatusButton causeId={c.id} variant="close" />}
-                      {c.status === "CLOSED"    && <CauseStatusButton causeId={c.id} variant="reopen" />}
-                      {c.status === "DRAFT"     && <CauseStatusButton causeId={c.id} variant="publish" />}
-                      <Link href={`/admin/causes/new?from=${encodeURIComponent(c.slug)}`} className="text-xs font-semibold text-ink hover:text-accent-600" title="Create a follow-up campaign with these details pre-filled">
-                        Duplicate
-                      </Link>
-                      <Link href={`/donations/${c.slug}`} target="_blank" className="text-xs font-semibold text-accent-600 hover:text-accent-700">
-                        View →
-                      </Link>
-                    </div>
+                    <CauseRowMenu
+                      causeId={c.id}
+                      slug={c.slug}
+                      statusVariant={
+                        c.status === "PUBLISHED" ? "close" :
+                        c.status === "CLOSED"    ? "reopen" :
+                        c.status === "DRAFT"     ? "publish" :
+                        null
+                      }
+                    />
                   </td>
                 </tr>
               );
