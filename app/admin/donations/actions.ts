@@ -1,5 +1,6 @@
 "use server";
 
+import { after } from "next/server";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import type { DonationType } from "@prisma/client";
@@ -99,7 +100,6 @@ export async function approveDonationAction(formData: FormData) {
     select: { amount: true, cause: { select: { slug: true } } },
   });
   await approveDonation(id, user.userId, { editedAmount });
-  await issueReceiptForDonation(id);
   await audit({
     action: "donation.approve",
     userId: user.userId,
@@ -115,6 +115,25 @@ export async function approveDonationAction(formData: FormData) {
   revalidatePath("/");
   revalidatePath("/current-causes");
   if (before?.cause.slug) revalidatePath(`/donations/${before.cause.slug}`);
+
+  // Receipt issuance (PDF generation 1-2s + two Gmail SMTP sends 2-5s each)
+  // was the entire wait the admin felt after clicking Approve — 5-12s on top
+  // of the actually-relevant work. The donation is already APPROVED, the
+  // cause total is already bumped, and the donor list will refresh on the
+  // next request. The receipt only needs to exist eventually, not before
+  // the admin sees the row update.
+  //
+  // Defer via after() — Vercel keeps the function alive past the response,
+  // PDF + emails finish in the background. issueReceiptForDonation is
+  // idempotent (early-returns if sentAt is set), so a manual Resend Receipt
+  // click later is safe. Failures are logged for monitoring.
+  after(async () => {
+    try {
+      await issueReceiptForDonation(id);
+    } catch (e) {
+      console.error("[approveDonationAction] background receipt issuance failed", { donationId: id, error: e });
+    }
+  });
 }
 
 export async function resendReceiptAction(formData: FormData) {
@@ -123,7 +142,6 @@ export async function resendReceiptAction(formData: FormData) {
   const d = await prisma.donation.findUnique({ where: { id }, select: { status: true, cause: { select: { slug: true } } } });
   if (!d) throw new Error("Donation not found.");
   if (d.status !== "APPROVED") throw new Error("Receipt can only be resent for APPROVED donations.");
-  await resendReceiptForDonation(id);
   await audit({
     action: "donation.approve", // closest existing — represents the "receipt issued" follow-up
     userId: user.userId,
@@ -132,6 +150,16 @@ export async function resendReceiptAction(formData: FormData) {
     payload: { resend: true },
   });
   revalidatePath("/admin/donations");
+  // Resend is the slowest action in the donations admin (Gmail SMTP +
+  // potential PDF regeneration). Defer so the button's spinner goes away
+  // immediately while the email actually sends in the background.
+  after(async () => {
+    try {
+      await resendReceiptForDonation(id);
+    } catch (e) {
+      console.error("[resendReceiptAction] background resend failed", { donationId: id, error: e });
+    }
+  });
 }
 
 export async function rejectDonationAction(formData: FormData) {
