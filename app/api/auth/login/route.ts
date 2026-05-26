@@ -1,18 +1,18 @@
-import { NextResponse } from "next/server";
+import { after, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { createSession, verifyPassword, sessionCookieName, sessionMaxAge } from "@/lib/auth";
+import { createSession, verifyPassword, hashPassword, needsRehash, sessionCookieName, sessionMaxAge } from "@/lib/auth";
 import { rateLimit, callerIp, LIMITS } from "@/lib/rate-limit";
 
 // Force this route onto the Node.js runtime (Prisma doesn't run on Edge).
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// Pre-computed bcrypt hash for the literal string "dummy-not-a-real-password" at cost 12.
+// Pre-computed bcrypt hash for the literal string "dummy-not-a-real-password" at cost 10.
 // We compare against this when the user doesn't exist (or has no password set yet) so the
-// failed-login response time is indistinguishable from a wrong-password response. Without
-// this, the missing-user path returns ~5ms while the real path takes ~250ms — trivially
-// distinguishes valid emails. Generated once and committed; the secret here doesn't matter.
-const DUMMY_HASH = "$2a$12$ytMWzEKr2bEY85.nLFThweuQe49xpiejZ6qNahW064gA1aSBzPrlS";
+// failed-login response time is indistinguishable from a wrong-password response. Cost MUST
+// match the BCRYPT_COST in lib/auth.ts so missing-user timing matches real-user timing —
+// otherwise the missing-user path would short-circuit faster and leak which emails exist.
+const DUMMY_HASH = "$2a$10$zMn0Z9039d400cwC3eLF/u7PKbgonq5OWpXqEWQUoJAcckPB7UqiG";
 
 const MAX_FAILED_ATTEMPTS = 5;
 const LOCKOUT_MINUTES = 15;
@@ -67,12 +67,11 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Invalid email or password" }, { status: 401 });
     }
 
-    // 5. Success — clear lockout state and stamp lastLoginAt.
-    await prisma.user.update({
-      where: { id: user.id },
-      data: { lastLoginAt: new Date(), failedLoginAttempts: 0, lockedUntil: null },
-    });
-
+    // 5. Success path — build + sign the session token immediately. Everything
+    //    else (lastLoginAt stamp, lockout reset, opportunistic rehash) is
+    //    deferred via after() so the response goes out the door without
+    //    waiting on extra DB round-trips. Saves ~200-300ms perceived latency
+    //    on the login flow.
     const token = await createSession({
       userId: user.id,
       email: user.email,
@@ -88,6 +87,30 @@ export async function POST(req: Request) {
       path: "/",
       maxAge: sessionMaxAge,
     });
+
+    after(async () => {
+      try {
+        // If the stored hash is at a higher cost than our current target,
+        // re-hash with the cheaper cost and store back. Next sign-in then runs
+        // ~4x faster. We have the plaintext password available here as it was
+        // just verified, so this is the natural place to migrate.
+        const newHash = needsRehash(user.passwordHash!) ? await hashPassword(String(password)) : null;
+        await prisma.user.update({
+          where: { id: user.id },
+          data: {
+            lastLoginAt: new Date(),
+            failedLoginAttempts: 0,
+            lockedUntil: null,
+            ...(newHash ? { passwordHash: newHash } : {}),
+          },
+        });
+      } catch (e) {
+        // Background failure shouldn't surface to the user — they're already
+        // signed in. Log so we can spot regressions in Vercel function logs.
+        console.error("[auth/login] post-login update failed", e);
+      }
+    });
+
     return res;
   } catch (e) {
     console.error("[auth/login]", e);
