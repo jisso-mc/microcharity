@@ -150,17 +150,22 @@ export async function resendReceiptAction(formData: FormData) {
     entityId: id,
     payload: { resend: true },
   });
+  // Send the receipt synchronously (NOT in after()) so the button label
+  // updates to "Resend receipt" once the email actually goes out. With
+  // after(), the response returned + page revalidated *before* sentAt was
+  // set, so the row re-rendered with receiptSent=false and the button
+  // stayed stuck on "Send receipt" even after the email arrived. Trade-off:
+  // the admin waits ~5-10s for PDF + SMTP, but that wait IS the signal
+  // that the email went out — they need to see it succeed.
+  try {
+    await resendReceiptForDonation(id);
+  } catch (e) {
+    console.error("[resendReceiptAction] failed", { donationId: id, error: e });
+    throw new Error("Failed to send receipt. Please try again.");
+  }
+  // Revalidate AFTER the receipt is sent so the page re-render picks up
+  // the new sentAt timestamp and the button flips to "Resend receipt".
   revalidatePath("/admin/donations");
-  // Resend is the slowest action in the donations admin (Gmail SMTP +
-  // potential PDF regeneration). Defer so the button's spinner goes away
-  // immediately while the email actually sends in the background.
-  after(async () => {
-    try {
-      await resendReceiptForDonation(id);
-    } catch (e) {
-      console.error("[resendReceiptAction] background resend failed", { donationId: id, error: e });
-    }
-  });
 }
 
 export async function rejectDonationAction(formData: FormData) {
