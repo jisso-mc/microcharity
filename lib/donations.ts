@@ -238,9 +238,14 @@ export async function approveDonation(donationId: string, approverId: string | n
     // Behaviour (per Jisso):
     //   * Skips if cause is already CLOSED — admin cancellation wins over
     //     a late-arriving donation that nudges over the line.
-    //   * Skips if any existing timeline entry already says "fund raising
-    //     closed" (case/whitespace-insensitive) — avoids duplicating an
-    //     entry an admin added manually.
+    //   * Skips if the LATEST timeline entry already says "fund raising
+    //     closed" — avoids duplicating an entry an admin added manually.
+    //     IMPORTANT: this looks at the most recent entry only, NOT the
+    //     whole history. Causes created via Duplicate inherit older
+    //     "Fund Raising Closed" entries from previous rounds — those
+    //     belong to past rounds and must not block auto-close on the
+    //     current round (the bug that made Saniya's May 2026 round
+    //     stay open at 60,100 / 60,000).
     //   * Skips if goalAmount === 0 — informational causes (e.g. JCI
     //     Nalukody) have no fund-raising target.
     //
@@ -255,14 +260,19 @@ export async function approveDonation(donationId: string, approverId: string | n
         raisedAmount: true,
         goalAmount: true,
         status: true,
-        updates: { select: { caption: true } },
+        // Only the most recent entry is needed for the idempotency check —
+        // historical "Fund Raising Closed" entries from duplicated rounds
+        // would otherwise silently suppress auto-close on the new round.
+        updates: { select: { caption: true }, orderBy: { sortOrder: "desc" }, take: 1 },
       },
     });
+    const latestCaption = causeNow.updates[0]?.caption ?? "";
+    const alreadyClosedByLatestEntry = /fund\s+raising\s+closed/i.test(latestCaption);
     const goalReached =
       causeNow.goalAmount > 0
       && causeNow.raisedAmount >= causeNow.goalAmount
       && causeNow.status !== "CLOSED"
-      && !causeNow.updates.some((u) => /fund\s+raising\s+closed/i.test(u.caption ?? ""));
+      && !alreadyClosedByLatestEntry;
     if (goalReached) {
       const last = await tx.causeUpdate.findFirst({
         where: { causeId: d.causeId },
