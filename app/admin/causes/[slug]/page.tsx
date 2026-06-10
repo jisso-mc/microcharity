@@ -7,6 +7,7 @@ import CauseStatusButton from "../CauseStatusButton";
 import AnnouncementPanel from "./AnnouncementPanel";
 import AddTimelineEntryForm from "./AddTimelineEntryForm";
 import DeleteUpdateButton from "./DeleteUpdateButton";
+import EditTimelineEntryButton from "./EditTimelineEntryButton";
 
 export const dynamic = "force-dynamic";
 
@@ -103,7 +104,9 @@ export default async function AdminCauseDetailPage({ params }: { params: Promise
         ) : (
           <ul className="space-y-3">
             {cause.updates.map((u) => (
-              <li key={u.id} className="rounded-2xl bg-white border border-[var(--color-line)] p-5">
+              // `relative` so the inline EditTimelineEntryButton's edit
+              // form (absolute, inset-0) overlays this li cleanly when open.
+              <li key={u.id} className="relative rounded-2xl bg-white border border-[var(--color-line)] p-5">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0 flex-1">
                     {u.caption && (
@@ -111,11 +114,20 @@ export default async function AdminCauseDetailPage({ params }: { params: Promise
                     )}
                     <p className="text-sm text-body whitespace-pre-wrap leading-relaxed">{u.body}</p>
                   </div>
-                  <DeleteUpdateButton
-                    id={u.id}
-                    slug={cause.slug}
-                    preview={u.caption?.trim() || u.body.trim().split(/\r?\n/)[0]}
-                  />
+                  <div className="flex items-center gap-4 flex-shrink-0">
+                    <EditTimelineEntryButton
+                      id={u.id}
+                      slug={cause.slug}
+                      caption={u.caption ?? ""}
+                      body={u.body}
+                      postedAt={u.postedAt.toISOString()}
+                    />
+                    <DeleteUpdateButton
+                      id={u.id}
+                      slug={cause.slug}
+                      preview={u.caption?.trim() || u.body.trim().split(/\r?\n/)[0]}
+                    />
+                  </div>
                 </div>
               </li>
             ))}

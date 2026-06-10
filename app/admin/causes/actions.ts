@@ -60,6 +60,7 @@ export async function deleteCauseUpdateAction(formData: FormData) {
 }
 
 export type AddUpdateState = { error?: string; ok?: true };
+export type UpdateCauseUpdateState = { error?: string; ok?: true };
 
 // Format a YYYY-MM-DD date string as "Mon D, YYYY" to match the caption
 // convention used by every existing timeline entry (e.g. "Mar 17, 2025").
@@ -115,6 +116,60 @@ export async function addCauseUpdateAction(_prev: AddUpdateState, formData: Form
       caption: `${formatCaptionDate(dateRaw)} - ${title}`,
       body,
       sortOrder: nextSort,
+      postedAt: new Date(`${dateRaw}T12:00:00.000Z`),
+    },
+  });
+
+  revalidatePath(`/admin/causes/${slug}`);
+  revalidatePath(`/donations/${slug}`);
+  revalidatePath("/current-causes");
+  revalidatePath("/success-stories");
+  return { ok: true };
+}
+
+// Edit an existing timeline entry. Different from add in that it preserves
+// the entry's sortOrder and its trailing "(MCID-...)" tag (if any). Admins
+// use this when they realise the date / title / body of an existing entry
+// is wrong — typical case: a new entry was added with a blank title, so the
+// caption shows only the date. Without this action they'd have to delete +
+// re-add, which loses the entry's position and timestamps.
+export async function updateCauseUpdateAction(_prev: UpdateCauseUpdateState, formData: FormData): Promise<UpdateCauseUpdateState> {
+  await requireAdmin();
+  const id = String(formData.get("id") ?? "").trim();
+  const slug = String(formData.get("slug") ?? "").trim();
+  const dateRaw = String(formData.get("date") ?? "").trim();
+  const title = String(formData.get("title") ?? "").trim();
+  const body = String(formData.get("body") ?? "").trim();
+
+  if (!id || !slug) return { error: "Missing entry reference." };
+  if (!dateRaw) return { error: "Pick a date for this entry." };
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateRaw)) return { error: "Date must be a valid YYYY-MM-DD value." };
+  if (!title) return { error: "Title is required (e.g. 'Fund Raising Approved')." };
+  if (!body) return { error: "Description is required." };
+
+  const existing = await prisma.causeUpdate.findUnique({
+    where: { id },
+    select: { id: true, caption: true, cause: { select: { slug: true } } },
+  });
+  if (!existing) return { error: "Entry not found." };
+  if (existing.cause.slug !== slug) return { error: "Entry doesn't belong to this cause." };
+
+  // Preserve any "(MCID-...)" suffix from the original caption — the MCID is
+  // allocated at create time and is sequence-anchored, so we must not
+  // re-issue or drop it on edit. Examples we need to round-trip:
+  //   "Aug 01, 2023 - Bangalore, Karnataka(MCID-105-23-24)"
+  //   "Jun 10, 2026 (MCID-102-26-27)"
+  //   "Aug 4, 2023 - Fund Raising Approved"   (no MCID — leave the new
+  //                                            caption MCID-less)
+  const mcidMatch = (existing.caption ?? "").match(/\(MCID-[A-Z0-9-]+\)/);
+  const mcidSuffix = mcidMatch ? ` ${mcidMatch[0]}` : "";
+  const newCaption = `${formatCaptionDate(dateRaw)} - ${title}${mcidSuffix}`;
+
+  await prisma.causeUpdate.update({
+    where: { id },
+    data: {
+      caption: newCaption,
+      body,
       postedAt: new Date(`${dateRaw}T12:00:00.000Z`),
     },
   });
