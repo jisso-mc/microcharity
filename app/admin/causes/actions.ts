@@ -8,6 +8,7 @@ import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/session";
 import { nextMcId, composeCaption } from "@/lib/mcid";
 import { retryOnUniqueViolation } from "@/lib/retry";
+import { audit } from "@/lib/audit";
 
 async function requireAdmin() {
   const user = await getCurrentUser();
@@ -357,4 +358,57 @@ export async function setCauseStatusAction(formData: FormData) {
   revalidatePath("/current-causes");
   revalidatePath("/success-stories");
   revalidatePath(`/donations/${cause.slug}`);
+}
+
+// Hard-delete a cause, but ONLY when it has zero donations. Causes with real
+// donation history are refused — their giving record must survive for audit /
+// 80G purposes, and a cause is never the right thing to nuke when money has
+// flowed through it (delete the donations first via the ad-hoc cleanup scripts
+// if that's ever genuinely needed). This guard makes the menu item safe to
+// expose: the worst a misclick can do is remove an empty / test cause.
+//
+// On delete we cascade:
+//   * CauseUpdate rows — automatic (onDelete: Cascade on the cause relation)
+//   * CauseAnnouncement rows — NOT auto-cascading, so we delete them explicitly
+//     inside the transaction (their AnnouncementRecipient children cascade).
+export async function deleteCauseAction(formData: FormData) {
+  const user = await requireAdmin();
+  const id = String(formData.get("id") ?? "").trim();
+  if (!id) throw new Error("Missing cause id.");
+
+  const cause = await prisma.cause.findUnique({
+    where: { id },
+    select: { id: true, slug: true, title: true, _count: { select: { donations: true } } },
+  });
+  if (!cause) throw new Error("Cause not found.");
+
+  // Block on any donation, regardless of status — even a PENDING / FAILED row
+  // means someone interacted with this cause and the history matters.
+  if (cause._count.donations > 0) {
+    throw new Error(
+      `"${cause.title}" has ${cause._count.donations} donation(s) and can't be deleted. Close it instead, or remove the donations first.`
+    );
+  }
+
+  await prisma.$transaction(async (tx) => {
+    // Announcements don't cascade from Cause; clear them first so the cause
+    // delete doesn't trip the foreign-key constraint. Their recipient rows
+    // cascade from CauseAnnouncement automatically.
+    await tx.causeAnnouncement.deleteMany({ where: { causeId: id } });
+    // Deleting the cause cascades its CauseUpdate timeline entries.
+    await tx.cause.delete({ where: { id } });
+  });
+
+  await audit({
+    action: "cause.delete",
+    userId: user.userId,
+    entityType: "Cause",
+    entityId: id,
+    payload: { slug: cause.slug, title: cause.title },
+  });
+
+  revalidatePath("/admin/causes");
+  revalidatePath("/");
+  revalidatePath("/current-causes");
+  revalidatePath("/success-stories");
 }

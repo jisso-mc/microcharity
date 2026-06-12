@@ -59,6 +59,9 @@ export default async function CausesAdminPage({ searchParams }: { searchParams: 
         id: true, slug: true, title: true, status: true,
         goalAmount: true, raisedAmount: true,
         startDate: true, createdAt: true,
+        // Donation count gates the Delete menu item — causes with any
+        // donations can't be hard-deleted.
+        _count: { select: { donations: true } },
       },
     }),
     // Pull every cause's startDate (cheap — just one indexed column) so we can build
@@ -177,6 +180,8 @@ export default async function CausesAdminPage({ searchParams }: { searchParams: 
                     <CauseRowMenu
                       causeId={c.id}
                       slug={c.slug}
+                      causeTitle={c.title}
+                      hasDonations={c._count.donations > 0}
                       statusVariant={
                         c.status === "PUBLISHED" ? "close" :
                         c.status === "CLOSED"    ? "reopen" :

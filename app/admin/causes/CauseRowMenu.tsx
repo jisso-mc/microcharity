@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import CauseStatusButton from "./CauseStatusButton";
+import { deleteCauseAction } from "./actions";
 
 // 3-dot action menu for each cause row in /admin/causes. Replaces the flat
 // "Close · Duplicate · View" link cluster — same actions, just hidden behind
@@ -23,6 +24,8 @@ export default function CauseRowMenu({
   causeId,
   slug,
   statusVariant,
+  causeTitle,
+  hasDonations,
 }: {
   causeId: string;
   slug: string;
@@ -30,6 +33,13 @@ export default function CauseRowMenu({
   // status has no flippable action (shouldn't happen today but kept for
   // safety as schema evolves).
   statusVariant: Variant | null;
+  // Shown in the delete confirm dialog so the admin sees exactly what
+  // they're about to remove.
+  causeTitle: string;
+  // When true, the cause has at least one donation and can't be hard-deleted.
+  // The Delete item renders disabled with an explanatory tooltip instead of
+  // letting the click through to a server-side error.
+  hasDonations: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -111,6 +121,43 @@ export default function CauseRowMenu({
             onClick={() => setOpen(false)}
             description="Opens the donor-facing page in a new tab."
           />
+
+          {/* Delete — separated by a divider and coloured danger-red. Hard
+              delete, only permitted for causes with zero donations (the
+              server action enforces this too). When the cause has donations
+              the item is disabled with a tooltip rather than letting the
+              click through to an error. */}
+          <div className="my-1 border-t border-[var(--color-line)]" />
+          {hasDonations ? (
+            <div
+              role="menuitem"
+              aria-disabled="true"
+              className="px-3 py-2 text-muted/60 cursor-not-allowed"
+              title="This cause has donations and can't be deleted. Close it instead."
+            >
+              Delete cause
+            </div>
+          ) : (
+            <form
+              action={deleteCauseAction}
+              onSubmit={(e) => {
+                const ok = window.confirm(
+                  `Delete "${causeTitle}"?\n\nThis permanently removes the cause and its timeline entries. It can't be undone.`
+                );
+                if (!ok) e.preventDefault();
+                else setOpen(false);
+              }}
+            >
+              <input type="hidden" name="id" value={causeId} />
+              <button
+                type="submit"
+                role="menuitem"
+                className="block w-full text-left px-3 py-2 hover:bg-red-50 text-red-600 hover:text-red-700"
+              >
+                Delete cause
+              </button>
+            </form>
+          )}
         </div>
       )}
     </div>

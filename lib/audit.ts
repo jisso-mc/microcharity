@@ -18,6 +18,7 @@ export type AuditAction =
   | "cause.create"
   | "cause.publish"
   | "cause.close"
+  | "cause.delete"
   | "cause.update.delete"
   // Users
   | "user.invite"

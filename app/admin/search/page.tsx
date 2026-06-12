@@ -29,7 +29,10 @@ export default async function AdminSearchPage({ searchParams }: { searchParams: 
       },
       take: 50,
       orderBy: [{ status: "asc" }, { updatedAt: "desc" }],
-      select: { id: true, title: true, slug: true, status: true, raisedAmount: true, goalAmount: true },
+      select: {
+        id: true, title: true, slug: true, status: true, raisedAmount: true, goalAmount: true,
+        _count: { select: { donations: true } },
+      },
     }),
     prisma.donor.findMany({
       where: {
@@ -98,6 +101,8 @@ export default async function AdminSearchPage({ searchParams }: { searchParams: 
                         <CauseRowMenu
                           causeId={c.id}
                           slug={c.slug}
+                          causeTitle={c.title}
+                          hasDonations={c._count.donations > 0}
                           statusVariant={
                             c.status === "PUBLISHED" ? "close" :
                             c.status === "CLOSED"    ? "reopen" :
