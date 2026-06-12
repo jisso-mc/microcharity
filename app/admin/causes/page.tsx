@@ -59,9 +59,11 @@ export default async function CausesAdminPage({ searchParams }: { searchParams: 
         id: true, slug: true, title: true, status: true,
         goalAmount: true, raisedAmount: true,
         startDate: true, createdAt: true,
-        // Donation count gates the Delete menu item — causes with any
-        // donations can't be hard-deleted.
-        _count: { select: { donations: true } },
+        // Approved-donation count gates the Delete menu item — a cause with
+        // real (receipted) giving history can't be hard-deleted. PENDING /
+        // FAILED / REJECTED rows don't count, so a test cause with only an
+        // un-approved submission stays deletable.
+        _count: { select: { donations: { where: { status: "APPROVED" } } } },
       },
     }),
     // Pull every cause's startDate (cheap — just one indexed column) so we can build

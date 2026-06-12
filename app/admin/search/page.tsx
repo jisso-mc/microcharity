@@ -31,7 +31,7 @@ export default async function AdminSearchPage({ searchParams }: { searchParams: 
       orderBy: [{ status: "asc" }, { updatedAt: "desc" }],
       select: {
         id: true, title: true, slug: true, status: true, raisedAmount: true, goalAmount: true,
-        _count: { select: { donations: true } },
+        _count: { select: { donations: { where: { status: "APPROVED" } } } },
       },
     }),
     prisma.donor.findMany({

@@ -36,9 +36,10 @@ export default function CauseRowMenu({
   // Shown in the delete confirm dialog so the admin sees exactly what
   // they're about to remove.
   causeTitle: string;
-  // When true, the cause has at least one donation and can't be hard-deleted.
-  // The Delete item renders disabled with an explanatory tooltip instead of
-  // letting the click through to a server-side error.
+  // True when the cause has at least one APPROVED donation — real, receipted
+  // giving history that must not be deleted. The Delete item renders disabled
+  // with an explanatory tooltip. PENDING/FAILED/REJECTED donations do NOT set
+  // this, so a test cause with only an unapproved submission stays deletable.
   hasDonations: boolean;
 }) {
   const [open, setOpen] = useState(false);
@@ -123,17 +124,17 @@ export default function CauseRowMenu({
           />
 
           {/* Delete — separated by a divider and coloured danger-red. Hard
-              delete, only permitted for causes with zero donations (the
-              server action enforces this too). When the cause has donations
-              the item is disabled with a tooltip rather than letting the
-              click through to an error. */}
+              delete, only permitted for causes with no APPROVED donations
+              (the server action enforces this too). When the cause has
+              approved/receipted donations the item is disabled with a
+              tooltip rather than letting the click through to an error. */}
           <div className="my-1 border-t border-[var(--color-line)]" />
           {hasDonations ? (
             <div
               role="menuitem"
               aria-disabled="true"
               className="px-3 py-2 text-muted/60 cursor-not-allowed"
-              title="This cause has donations and can't be deleted. Close it instead."
+              title="This cause has approved donations and can't be deleted. Close it instead."
             >
               Delete cause
             </div>
@@ -142,7 +143,7 @@ export default function CauseRowMenu({
               action={deleteCauseAction}
               onSubmit={(e) => {
                 const ok = window.confirm(
-                  `Delete "${causeTitle}"?\n\nThis permanently removes the cause and its timeline entries. It can't be undone.`
+                  `Delete "${causeTitle}"?\n\nThis permanently removes the cause, its timeline entries, and any unapproved (pending/failed) donation records. It can't be undone.`
                 );
                 if (!ok) e.preventDefault();
                 else setOpen(false);

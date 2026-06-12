@@ -360,17 +360,21 @@ export async function setCauseStatusAction(formData: FormData) {
   revalidatePath(`/donations/${cause.slug}`);
 }
 
-// Hard-delete a cause, but ONLY when it has zero donations. Causes with real
-// donation history are refused — their giving record must survive for audit /
-// 80G purposes, and a cause is never the right thing to nuke when money has
-// flowed through it (delete the donations first via the ad-hoc cleanup scripts
-// if that's ever genuinely needed). This guard makes the menu item safe to
-// expose: the worst a misclick can do is remove an empty / test cause.
+// Hard-delete a cause, but ONLY when it has no APPROVED donations. The block
+// is about protecting *real* giving history (APPROVED donations have counted
+// toward the total and had 80G receipts issued) — not about whether anyone
+// ever touched a form. PENDING / FAILED / REJECTED donations represent
+// abandoned or un-verified attempts (e.g. a test QR submission that was never
+// approved), carry no money, and are exactly the cruft that accumulates on a
+// throwaway cause — so they don't block deletion and are removed along with it.
 //
-// On delete we cascade:
-//   * CauseUpdate rows — automatic (onDelete: Cascade on the cause relation)
-//   * CauseAnnouncement rows — NOT auto-cascading, so we delete them explicitly
-//     inside the transaction (their AnnouncementRecipient children cascade).
+// On delete we clear, in one transaction:
+//   * non-approved Donation rows — explicit deleteMany (they don't cascade from
+//     Cause; their Receipt children cascade from Donation). Safe because we've
+//     already refused if any APPROVED donation exists.
+//   * CauseAnnouncement rows — NOT auto-cascading, so deleted explicitly (their
+//     AnnouncementRecipient children cascade).
+//   * the Cause itself — cascades its CauseUpdate timeline entries.
 export async function deleteCauseAction(formData: FormData) {
   const user = await requireAdmin();
   const id = String(formData.get("id") ?? "").trim();
@@ -378,22 +382,29 @@ export async function deleteCauseAction(formData: FormData) {
 
   const cause = await prisma.cause.findUnique({
     where: { id },
-    select: { id: true, slug: true, title: true, _count: { select: { donations: true } } },
+    select: {
+      id: true, slug: true, title: true,
+      // Count ONLY approved donations — that's what represents real,
+      // receipted giving history and must never be silently deleted.
+      _count: { select: { donations: { where: { status: "APPROVED" } } } },
+    },
   });
   if (!cause) throw new Error("Cause not found.");
 
-  // Block on any donation, regardless of status — even a PENDING / FAILED row
-  // means someone interacted with this cause and the history matters.
   if (cause._count.donations > 0) {
     throw new Error(
-      `"${cause.title}" has ${cause._count.donations} donation(s) and can't be deleted. Close it instead, or remove the donations first.`
+      `"${cause.title}" has ${cause._count.donations} approved donation(s) and can't be deleted. Close it instead.`
     );
   }
 
   await prisma.$transaction(async (tx) => {
-    // Announcements don't cascade from Cause; clear them first so the cause
-    // delete doesn't trip the foreign-key constraint. Their recipient rows
-    // cascade from CauseAnnouncement automatically.
+    // No APPROVED donations got past the guard above, so every donation on
+    // this cause is PENDING / FAILED / REJECTED — remove them (receipts, if
+    // any somehow exist, cascade from Donation) so the cause delete doesn't
+    // trip the Donation→Cause foreign key.
+    await tx.donation.deleteMany({ where: { causeId: id } });
+    // Announcements don't cascade from Cause; clear them first. Their
+    // recipient rows cascade from CauseAnnouncement automatically.
     await tx.causeAnnouncement.deleteMany({ where: { causeId: id } });
     // Deleting the cause cascades its CauseUpdate timeline entries.
     await tx.cause.delete({ where: { id } });
