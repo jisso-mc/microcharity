@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { headers } from "next/headers";
 import { getCurrentUser } from "@/lib/session";
-import { processNextBatch, getAnnouncementProgress } from "@/lib/announcements";
+import { processNextBatch, getAnnouncementProgress, getFailureSummary } from "@/lib/announcements";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -27,7 +27,10 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   try {
     const progress = await getAnnouncementProgress(id);
     if (!progress) return NextResponse.json({ error: "Announcement not found." }, { status: 404 });
-    return NextResponse.json({ ok: true, announcement: progress });
+    // Include a grouped breakdown of failure reasons so the admin can see WHY
+    // sends failed. Only queried when there are failures to report.
+    const failures = progress.failureCount > 0 ? await getFailureSummary(id) : [];
+    return NextResponse.json({ ok: true, announcement: progress, failures });
   } catch (e) {
     console.error("[cause-announcements/process GET]", e);
     return NextResponse.json({ error: e instanceof Error ? e.message : "Could not read status." }, { status: 500 });
@@ -52,7 +55,8 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
 
   try {
     const progress = await processNextBatch(id, { origin });
-    return NextResponse.json({ ok: true, announcement: progress });
+    const failures = progress.failureCount > 0 ? await getFailureSummary(id) : [];
+    return NextResponse.json({ ok: true, announcement: progress, failures });
   } catch (e) {
     console.error("[cause-announcements/process POST]", e);
     // Even on failure, try to hand back the current progress so the UI can keep

@@ -347,6 +347,41 @@ export async function getAnnouncementProgress(announcementId: string): Promise<A
   };
 }
 
+// Group FAILED recipients by their error message so an admin can see WHY sends
+// failed (e.g. Gmail throttling, invalid address, timeout) without DB access.
+// Returns the most common reasons first, capped to a handful.
+export type FailureReason = { reason: string; count: number };
+export async function getFailureSummary(announcementId: string): Promise<FailureReason[]> {
+  const grouped = await prisma.announcementRecipient.groupBy({
+    by: ["error"],
+    where: { announcementId, status: "FAILED" },
+    _count: { _all: true },
+  });
+  return grouped
+    .map((g) => ({ reason: (g.error ?? "(no error recorded)").slice(0, 300), count: g._count._all }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 8);
+}
+
+// Requeue every FAILED recipient of an announcement back to PENDING so a
+// subsequent process() run retries them. SENT recipients are never touched, so
+// anyone already delivered is not re-emailed. Returns how many were requeued.
+// NOTE: recipients marked FAILED that had *actually* been delivered in an earlier
+// crashed run (rare) would be emailed again — callers should surface that caveat.
+export async function retryFailedRecipients(announcementId: string): Promise<number> {
+  const res = await prisma.announcementRecipient.updateMany({
+    where: { announcementId, status: "FAILED" },
+    data: { status: "PENDING", error: null },
+  });
+  if (res.count > 0) {
+    await prisma.causeAnnouncement.update({
+      where: { id: announcementId },
+      data: { status: "SENDING", completedAt: null },
+    });
+  }
+  return res.count;
+}
+
 // Persist the reconciled counts + derived status onto the parent row, and return a
 // fresh progress snapshot. Called at the end of every batch (and when there's
 // nothing to do) so the stored totals converge on the truth.
