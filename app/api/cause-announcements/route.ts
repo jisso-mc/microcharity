@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/session";
-import { createAnnouncement, ANNOUNCEMENT_PROGRESS_SELECT } from "@/lib/announcements";
+import { createAnnouncement, getAnnouncementProgress } from "@/lib/announcements";
 import { audit } from "@/lib/audit";
 import { TEST_ANNOUNCEMENT_RECIPIENTS } from "@/lib/trust";
 
@@ -78,10 +78,8 @@ export async function POST(req: Request) {
       payload: { causeId: cause.id, totalRecipients, isTest },
     });
 
-    const fresh = await prisma.causeAnnouncement.findUniqueOrThrow({
-      where: { id }, select: ANNOUNCEMENT_PROGRESS_SELECT,
-    });
-    return NextResponse.json({ ok: true, announcement: serialize(fresh) });
+    const fresh = await getAnnouncementProgress(id);
+    return NextResponse.json({ ok: true, announcement: fresh });
   } catch (e) {
     console.error("[cause-announcements]", e);
     return NextResponse.json({ error: e instanceof Error ? e.message : "Could not start." }, { status: 500 });
@@ -91,30 +89,5 @@ export async function POST(req: Request) {
 async function safeUserId(userId: string): Promise<string | null> {
   const u = await prisma.user.findUnique({ where: { id: userId }, select: { id: true } });
   return u?.id ?? null;
-}
-
-// Cast Date → string ISO for JSON.
-function serialize(row: {
-  id: string;
-  subject: string;
-  totalRecipients: number;
-  successCount: number;
-  failureCount: number;
-  status: "PENDING" | "SENDING" | "COMPLETED" | "CANCELLED";
-  isTest: boolean;
-  startedAt: Date;
-  completedAt: Date | null;
-}) {
-  return {
-    id: row.id,
-    subject: row.subject,
-    totalRecipients: row.totalRecipients,
-    successCount: row.successCount,
-    failureCount: row.failureCount,
-    status: row.status,
-    isTest: row.isTest,
-    startedAt: row.startedAt.toISOString(),
-    completedAt: row.completedAt?.toISOString() ?? null,
-  };
 }
 

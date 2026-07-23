@@ -45,6 +45,9 @@ export default async function AdminCauseDetailPage({ params }: { params: Promise
   ]);
   const announcements = announcementsRaw.map((a) => ({
     ...a,
+    // Derived remaining count for the initial render; the panel refreshes this
+    // with the DB's true per-recipient counts as soon as it mounts.
+    pendingCount: Math.max(0, a.totalRecipients - a.successCount - a.failureCount),
     startedAt: a.startedAt.toISOString(),
     completedAt: a.completedAt?.toISOString() ?? null,
   }));

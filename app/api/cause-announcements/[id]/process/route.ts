@@ -1,21 +1,45 @@
 import { NextResponse } from "next/server";
 import { headers } from "next/headers";
-import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/session";
-import { processNextBatch, ANNOUNCEMENT_PROGRESS_SELECT } from "@/lib/announcements";
+import { processNextBatch, getAnnouncementProgress } from "@/lib/announcements";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-// 60s is the hobby plan's hard ceiling for Node.js functions. A batch of 50 emails
-// at ~700ms each (Gmail SMTP + 200ms pause) is ~35-45s — comfortably inside.
+// 60s is the hobby plan's hard ceiling for Node.js functions. The batch loop is
+// time-boxed to BATCH_TIME_BUDGET_MS (40s), so it always returns on its own terms
+// — well inside this — and the client therefore always receives valid JSON.
 export const maxDuration = 60;
 
-// POST /api/cause-announcements/[id]/process — drains the next BATCH_SIZE PENDING
-// recipients. Idempotent on COMPLETED announcements (returns the current state).
-export async function POST(_req: Request, { params }: { params: Promise<{ id: string }> }) {
+async function requireAdmin() {
   const user = await getCurrentUser();
-  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  if (user.role !== "ADMIN") return NextResponse.json({ error: "Admins only" }, { status: 403 });
+  if (!user) return { error: NextResponse.json({ error: "Unauthorized" }, { status: 401 }) };
+  if (user.role !== "ADMIN") return { error: NextResponse.json({ error: "Admins only" }, { status: 403 }) };
+  return { user };
+}
+
+// GET /api/cause-announcements/[id]/process — read-only progress with reconciled
+// (true) counts. The panel polls this every few seconds so the status readout is
+// always live, independent of whether a send batch is currently running.
+export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
+  const gate = await requireAdmin();
+  if (gate.error) return gate.error;
+  const { id } = await params;
+  try {
+    const progress = await getAnnouncementProgress(id);
+    if (!progress) return NextResponse.json({ error: "Announcement not found." }, { status: 404 });
+    return NextResponse.json({ ok: true, announcement: progress });
+  } catch (e) {
+    console.error("[cause-announcements/process GET]", e);
+    return NextResponse.json({ error: e instanceof Error ? e.message : "Could not read status." }, { status: 500 });
+  }
+}
+
+// POST /api/cause-announcements/[id]/process — sends the next time-boxed batch of
+// PENDING recipients, then returns reconciled progress. Safe to call repeatedly:
+// already-sent recipients are never re-selected. Always responds with JSON.
+export async function POST(_req: Request, { params }: { params: Promise<{ id: string }> }) {
+  const gate = await requireAdmin();
+  if (gate.error) return gate.error;
 
   const { id } = await params;
 
@@ -27,27 +51,17 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
   const origin = `${proto}://${host}`;
 
   try {
-    await processNextBatch(id, { origin });
-    const after = await prisma.causeAnnouncement.findUniqueOrThrow({
-      where: { id },
-      select: ANNOUNCEMENT_PROGRESS_SELECT,
-    });
-    return NextResponse.json({
-      ok: true,
-      announcement: {
-        id: after.id,
-        subject: after.subject,
-        totalRecipients: after.totalRecipients,
-        successCount: after.successCount,
-        failureCount: after.failureCount,
-        status: after.status,
-        isTest: after.isTest,
-        startedAt: after.startedAt.toISOString(),
-        completedAt: after.completedAt?.toISOString() ?? null,
-      },
-    });
+    const progress = await processNextBatch(id, { origin });
+    return NextResponse.json({ ok: true, announcement: progress });
   } catch (e) {
-    console.error("[cause-announcements/process]", e);
-    return NextResponse.json({ error: e instanceof Error ? e.message : "Batch failed." }, { status: 500 });
+    console.error("[cause-announcements/process POST]", e);
+    // Even on failure, try to hand back the current progress so the UI can keep
+    // showing accurate numbers and decide whether to retry.
+    let progress = null;
+    try { progress = await getAnnouncementProgress(id); } catch { /* ignore */ }
+    return NextResponse.json(
+      { error: e instanceof Error ? e.message : "Batch failed.", announcement: progress },
+      { status: 500 }
+    );
   }
 }

@@ -14,11 +14,24 @@
 // donor — we derive them deterministically from email + a project secret.
 
 import crypto from "node:crypto";
-import type { Prisma } from "@prisma/client";
+import type { Prisma, AnnouncementStatus } from "@prisma/client";
 import { prisma } from "./prisma";
 import { sendEmail, safeHeader } from "./email";
 
-export const BATCH_SIZE = 50;            // per-poll send count (per the user's 50/min throttle)
+// How long a single process() invocation is allowed to keep sending before it
+// stops and returns cleanly. Kept comfortably under the route's maxDuration (60s)
+// so the function always finishes on its own terms and returns valid JSON, rather
+// than being killed mid-flight by the platform (which returns a non-JSON error
+// page and used to crash the client poller).
+export const BATCH_TIME_BUDGET_MS = 40_000;
+// Recipients pulled per DB round-trip inside the time-boxed loop. Small so progress
+// is written frequently — if the function is cut short, at most this many sends are
+// unaccounted for and simply get retried (as PENDING) on the next invocation.
+export const SEND_CHUNK = 10;
+// Courtesy pause between messages — keeps us under Gmail's per-second throughput.
+const INTER_MESSAGE_MS = 120;
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // HMAC secret reused from ADMIN_SESSION_SECRET (already enforced ≥32 chars). Same
 // key for every recipient; the donorEmail is the distinguishing input.
@@ -269,15 +282,117 @@ export async function createAnnouncement(input: {
   });
 }
 
+// ---------- Progress (true counts) ----------
+
+export type AnnouncementProgress = {
+  id: string;
+  subject: string;
+  status: AnnouncementStatus;
+  totalRecipients: number;
+  successCount: number;   // recipients actually SENT (source of truth: recipient rows)
+  failureCount: number;   // recipients FAILED
+  pendingCount: number;   // recipients still to send
+  openCount: number;
+  clickCount: number;
+  isTest: boolean;
+  startedAt: string;
+  completedAt: string | null;
+};
+
+// Count recipients by status straight from the AnnouncementRecipient rows. These
+// per-recipient rows are the source of truth — each is flipped to SENT/FAILED the
+// instant its email resolves, so they stay accurate even if a process() invocation
+// is cut short before it can roll the totals up onto the parent row.
+async function recipientCounts(announcementId: string): Promise<{ sent: number; failed: number; pending: number }> {
+  const grouped = await prisma.announcementRecipient.groupBy({
+    by: ["status"],
+    where: { announcementId },
+    _count: { _all: true },
+  });
+  let sent = 0, failed = 0, pending = 0;
+  for (const g of grouped) {
+    if (g.status === "SENT") sent = g._count._all;
+    else if (g.status === "FAILED") failed = g._count._all;
+    else if (g.status === "PENDING") pending = g._count._all;
+  }
+  return { sent, failed, pending };
+}
+
+// Read-only progress snapshot with reconciled (true) counts. Used by the status
+// endpoint the panel polls every few seconds, so the numbers never freeze or lie
+// even if a batch crashed halfway.
+export async function getAnnouncementProgress(announcementId: string): Promise<AnnouncementProgress | null> {
+  const a = await prisma.causeAnnouncement.findUnique({
+    where: { id: announcementId },
+    select: {
+      id: true, subject: true, status: true, totalRecipients: true,
+      openCount: true, clickCount: true, isTest: true, startedAt: true, completedAt: true,
+    },
+  });
+  if (!a) return null;
+  const c = await recipientCounts(announcementId);
+  return {
+    id: a.id,
+    subject: a.subject,
+    status: a.status,
+    totalRecipients: a.totalRecipients,
+    successCount: c.sent,
+    failureCount: c.failed,
+    pendingCount: c.pending,
+    openCount: a.openCount,
+    clickCount: a.clickCount,
+    isTest: a.isTest,
+    startedAt: a.startedAt.toISOString(),
+    completedAt: a.completedAt?.toISOString() ?? null,
+  };
+}
+
+// Persist the reconciled counts + derived status onto the parent row, and return a
+// fresh progress snapshot. Called at the end of every batch (and when there's
+// nothing to do) so the stored totals converge on the truth.
+async function reconcile(announcementId: string): Promise<AnnouncementProgress> {
+  const c = await recipientCounts(announcementId);
+  const current = await prisma.causeAnnouncement.findUniqueOrThrow({
+    where: { id: announcementId }, select: { status: true },
+  });
+  // Never resurrect a cancelled send. Otherwise: done when nothing is pending.
+  let status: AnnouncementStatus = current.status;
+  let completedAt: Date | null | undefined = undefined;
+  if (current.status !== "CANCELLED") {
+    if (c.pending === 0 && c.sent + c.failed > 0) {
+      status = "COMPLETED";
+      completedAt = new Date();
+    } else if (c.pending > 0) {
+      status = "SENDING";
+      completedAt = null;
+    }
+  }
+  await prisma.causeAnnouncement.update({
+    where: { id: announcementId },
+    data: {
+      successCount: c.sent,
+      failureCount: c.failed,
+      status,
+      ...(completedAt !== undefined ? { completedAt } : {}),
+    },
+  });
+  return (await getAnnouncementProgress(announcementId))!;
+}
+
 // ---------- Batch send ----------
 
-export async function processNextBatch(announcementId: string, opts: { origin: string }): Promise<{
-  processed: number;
-  sent: number;
-  failed: number;
-  remaining: number;
-  status: "PENDING" | "SENDING" | "COMPLETED" | "CANCELLED";
-}> {
+// Drain PENDING recipients for up to BATCH_TIME_BUDGET_MS, then return reconciled
+// progress. Design goals (all learned from a live incident):
+//   * Fail-proof: every recipient send is wrapped individually — one bad address
+//     or SMTP hiccup is recorded as FAILED and we move on, never aborting the run.
+//   * Never times out uncleanly: we stop sending once the time budget elapses and
+//     return normally, so the HTTP response is always valid JSON (the old fixed
+//     50-batch could outlast the platform limit → non-JSON error → dead poller).
+//   * Resumable: progress is written per-recipient, so a cut-short run loses
+//     nothing — the next call just picks up the remaining PENDING rows.
+//   * Idempotent-ish: already-SENT recipients are never selected again, so
+//     resuming can't re-email someone who already received it.
+export async function processNextBatch(announcementId: string, opts: { origin: string }): Promise<AnnouncementProgress> {
   const a = await prisma.causeAnnouncement.findUnique({
     where: { id: announcementId },
     include: {
@@ -298,26 +413,11 @@ export async function processNextBatch(announcementId: string, opts: { origin: s
     },
   });
   if (!a) throw new Error("Announcement not found.");
-  if (a.status === "COMPLETED" || a.status === "CANCELLED") {
-    return { processed: 0, sent: 0, failed: 0, remaining: 0, status: a.status };
-  }
+  // Cancelled sends are terminal; completed ones have nothing to do. Return the
+  // reconciled snapshot either way so callers always get consistent numbers.
+  if (a.status === "CANCELLED") return (await getAnnouncementProgress(announcementId))!;
 
-  const batch = await prisma.announcementRecipient.findMany({
-    where: { announcementId, status: "PENDING" },
-    take: BATCH_SIZE,
-    orderBy: { id: "asc" },
-  });
-
-  if (batch.length === 0) {
-    // No more pending — mark completed.
-    await prisma.causeAnnouncement.update({
-      where: { id: announcementId },
-      data: { status: "COMPLETED", completedAt: new Date() },
-    });
-    return { processed: 0, sent: 0, failed: 0, remaining: 0, status: "COMPLETED" };
-  }
-
-  // First batch flips status from PENDING → SENDING.
+  // Flip PENDING → SENDING up front so the UI shows "sending" immediately.
   if (a.status === "PENDING") {
     await prisma.causeAnnouncement.update({
       where: { id: announcementId },
@@ -333,59 +433,47 @@ export async function processNextBatch(announcementId: string, opts: { origin: s
     goalAmount: a.cause.goalAmount,
   };
 
-  let sent = 0;
-  let failed = 0;
-  // Send sequentially with a small inter-message delay. At ~500-800ms per Gmail
-  // send + 200ms wait we land around 50-70 sends per minute — within the user's
-  // 50/min target and avoids hitting per-second SMTP throughput caps.
-  for (const r of batch) {
-    try {
-      const html = renderAnnouncementHtml({ cause: causeInput, origin: opts.origin, recipientEmail: r.donorEmail, unsubscribeToken: r.unsubscribeToken, recipientId: r.id });
-      const text = renderAnnouncementText({ cause: causeInput, origin: opts.origin, recipientEmail: r.donorEmail, unsubscribeToken: r.unsubscribeToken });
-      const result = await sendEmail({ to: r.donorEmail, subject: safeHeader(a.subject), html, text });
-      if (result.ok) {
-        await prisma.announcementRecipient.update({
-          where: { id: r.id },
-          data: { status: "SENT", sentAt: new Date(), error: null },
-        });
-        sent++;
-      } else {
-        await prisma.announcementRecipient.update({
-          where: { id: r.id },
-          data: { status: "FAILED", error: result.reason },
-        });
-        failed++;
-      }
-    } catch (e) {
-      await prisma.announcementRecipient.update({
-        where: { id: r.id },
-        data: { status: "FAILED", error: e instanceof Error ? e.message : String(e) },
-      });
-      failed++;
-    }
-    // Inter-message courtesy pause — keeps us under Gmail's per-second throughput.
-    await new Promise((r) => setTimeout(r, 200));
-  }
+  const deadline = Date.now() + BATCH_TIME_BUDGET_MS;
 
-  await prisma.causeAnnouncement.update({
-    where: { id: announcementId },
-    data: { successCount: { increment: sent }, failureCount: { increment: failed } },
-  });
-
-  const remaining = await prisma.announcementRecipient.count({
-    where: { announcementId, status: "PENDING" },
-  });
-
-  let finalStatus: "PENDING" | "SENDING" | "COMPLETED" | "CANCELLED" = "SENDING";
-  if (remaining === 0) {
-    await prisma.causeAnnouncement.update({
-      where: { id: announcementId },
-      data: { status: "COMPLETED", completedAt: new Date() },
+  // Time-boxed drain loop. Re-query PENDING in small chunks so we always see the
+  // latest state and write progress frequently.
+  while (Date.now() < deadline) {
+    const chunk = await prisma.announcementRecipient.findMany({
+      where: { announcementId, status: "PENDING" },
+      take: SEND_CHUNK,
+      orderBy: { id: "asc" },
     });
-    finalStatus = "COMPLETED";
+    if (chunk.length === 0) break; // nothing left — done
+
+    for (const r of chunk) {
+      if (Date.now() >= deadline) break; // out of time — stop cleanly, rest stays PENDING
+      try {
+        const html = renderAnnouncementHtml({ cause: causeInput, origin: opts.origin, recipientEmail: r.donorEmail, unsubscribeToken: r.unsubscribeToken, recipientId: r.id });
+        const text = renderAnnouncementText({ cause: causeInput, origin: opts.origin, recipientEmail: r.donorEmail, unsubscribeToken: r.unsubscribeToken });
+        const result = await sendEmail({ to: r.donorEmail, subject: safeHeader(a.subject), html, text });
+        await prisma.announcementRecipient.update({
+          where: { id: r.id },
+          data: result.ok
+            ? { status: "SENT", sentAt: new Date(), error: null }
+            : { status: "FAILED", error: result.reason.slice(0, 500) },
+        });
+      } catch (e) {
+        // Any unexpected failure (SMTP timeout, bad address, DB blip on this row)
+        // is isolated to this recipient — record it and keep going.
+        try {
+          await prisma.announcementRecipient.update({
+            where: { id: r.id },
+            data: { status: "FAILED", error: (e instanceof Error ? e.message : String(e)).slice(0, 500) },
+          });
+        } catch (inner) {
+          console.error("[announcements] failed to mark recipient FAILED", r.id, inner);
+        }
+      }
+      await sleep(INTER_MESSAGE_MS);
+    }
   }
 
-  return { processed: batch.length, sent, failed, remaining, status: finalStatus };
+  return reconcile(announcementId);
 }
 
 // Return just the leading paragraph of a block of body text — split on a blank

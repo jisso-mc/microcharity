@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 type AnnouncementProgress = {
   id: string;
@@ -8,6 +8,7 @@ type AnnouncementProgress = {
   totalRecipients: number;
   successCount: number;
   failureCount: number;
+  pendingCount: number;
   openCount: number;
   clickCount: number;
   isTest: boolean;
@@ -27,7 +28,12 @@ type Props = {
   history: AnnouncementProgress[];
 };
 
-const POLL_INTERVAL_MS = 60_000;
+// How often to (a) drive the next send batch and (b) refresh the live status.
+// The batch driver reschedules itself after each batch finishes, so this is the
+// gap *between* batches, not a hard interval. Status polling is independent so the
+// numbers keep ticking up even while a long batch is mid-flight.
+const DRIVE_GAP_MS = 3_000;
+const STATUS_POLL_MS = 5_000;
 
 export default function AnnouncementPanel(props: Props) {
   const inFlight = props.history.find((h) => h.status === "PENDING" || h.status === "SENDING") ?? null;
@@ -35,29 +41,90 @@ export default function AnnouncementPanel(props: Props) {
   const [history, setHistory] = useState<AnnouncementProgress[]>(props.history);
   const [starting, setStarting] = useState<"test" | "real" | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Soft, non-fatal status note (e.g. "retrying…"). Distinct from `error`, which is
+  // reserved for hard failures that stop an action (bad input, failed to start).
+  const [note, setNote] = useState<string | null>(null);
   const [testEmails, setTestEmails] = useState(props.currentUserEmail);
 
-  useEffect(() => {
-    if (!active || active.status === "COMPLETED" || active.status === "CANCELLED") return;
+  // Keeps the latest active id available to the sender loop without re-subscribing.
+  const activeIdRef = useRef<string | null>(active?.id ?? null);
+  activeIdRef.current = active?.id ?? null;
 
-    let cancelled = false;
-    async function tick() {
-      if (cancelled || !active) return;
+  // ---- Sender loop + live status poller ----
+  // This is the heart of the fix. The old version did `await res.json()` with no
+  // guard, so any non-JSON response (a gateway timeout page, an empty 500) threw
+  // and permanently killed the poller — freezing the send. Here every fetch is
+  // defended: JSON parsing can't throw, non-OK responses become a soft "retrying"
+  // note, and the loop keeps going. Sending resumes automatically whenever this
+  // page is open (reopen the cause page after closing it to pick up where it left
+  // off — already-sent donors are never re-emailed).
+  useEffect(() => {
+    if (!active) return;
+    if (active.status === "COMPLETED" || active.status === "CANCELLED") return;
+
+    const id = active.id;
+    let disposed = false;
+    let driveTimer: ReturnType<typeof setTimeout> | undefined;
+    let statusTimer: ReturnType<typeof setInterval> | undefined;
+
+    function finish() {
+      disposed = true;
+      if (driveTimer) clearTimeout(driveTimer);
+      if (statusTimer) clearInterval(statusTimer);
+    }
+
+    function apply(p: AnnouncementProgress) {
+      if (disposed) return;
+      setActive(p);
+      setHistory((h) => h.map((row) => (row.id === p.id ? p : row)));
+      if (p.status === "COMPLETED" || p.status === "CANCELLED") finish();
+    }
+
+    // Read-only status refresh — cheap, frequent, never drives a send.
+    async function pollStatus() {
+      if (disposed) return;
       try {
-        const res = await fetch(`/api/cause-announcements/${active.id}/process`, { method: "POST" });
-        const j = await res.json();
-        if (!res.ok) throw new Error(j.error ?? "Batch failed.");
-        const updated: AnnouncementProgress = j.announcement;
-        setActive(updated);
-        setHistory((h) => h.map((row) => (row.id === updated.id ? updated : row)));
-      } catch (e) {
-        setError(e instanceof Error ? e.message : "Failed to send next batch.");
+        const res = await fetch(`/api/cause-announcements/${id}/process`, { method: "GET" });
+        const j = await res.json().catch(() => null);
+        if (j?.announcement) apply(j.announcement);
+      } catch {
+        /* transient — the next tick will retry */
       }
     }
-    void tick();
-    const t = setInterval(tick, POLL_INTERVAL_MS);
-    return () => { cancelled = true; clearInterval(t); };
-  }, [active]);
+
+    // Drive the next batch, then reschedule itself. Fully defended: no code path
+    // here can throw out of the loop.
+    async function drive() {
+      if (disposed) return;
+      let terminal = false;
+      try {
+        const res = await fetch(`/api/cause-announcements/${id}/process`, { method: "POST" });
+        const j = await res.json().catch(() => null); // never throws on non-JSON
+        if (j?.announcement) {
+          apply(j.announcement);
+          setNote(null);
+          terminal = j.announcement.status === "COMPLETED" || j.announcement.status === "CANCELLED";
+        } else {
+          // Non-JSON or error body — surface softly and keep going.
+          setNote("A send batch hit a snag — retrying automatically…");
+        }
+      } catch {
+        setNote("Network hiccup — retrying automatically…");
+      }
+      if (disposed || terminal) return;
+      driveTimer = setTimeout(drive, DRIVE_GAP_MS);
+    }
+
+    void pollStatus();
+    void drive();
+    statusTimer = setInterval(pollStatus, STATUS_POLL_MS);
+
+    return () => { finish(); };
+    // Re-subscribe only when the active announcement changes (new send started, or
+    // resumed a different one). Status changes are applied via setActive without
+    // tearing down the loop.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active?.id]);
 
   function parseTestEmails(raw: string): string[] {
     return Array.from(
@@ -92,6 +159,7 @@ export default function AnnouncementPanel(props: Props) {
 
     setStarting(mode);
     setError(null);
+    setNote(null);
     try {
       const fd = new FormData();
       fd.set("causeId", props.causeId);
@@ -100,8 +168,8 @@ export default function AnnouncementPanel(props: Props) {
         fd.set("testEmails", emails.join(", "));
       }
       const res = await fetch("/api/cause-announcements", { method: "POST", body: fd });
-      const j = await res.json();
-      if (!res.ok) throw new Error(j.error ?? "Failed to start.");
+      const j = await res.json().catch(() => null);
+      if (!res.ok || !j?.announcement) throw new Error(j?.error ?? "Failed to start.");
       const fresh: AnnouncementProgress = j.announcement;
       setActive(fresh);
       setHistory((h) => [fresh, ...h]);
@@ -118,7 +186,9 @@ export default function AnnouncementPanel(props: Props) {
         <h2 className="font-display text-xl text-ink">Launch announcement</h2>
         <p className="text-sm text-muted mt-1">
           Email all {props.optedInDonorCount} opted-in donors that this cause is live.
-          Sent in batches of 50 every minute; safe to close this page and come back later.
+          Sent in small batches with automatic retries. <strong>Keep this page open</strong> while
+          it sends — if you close it, just reopen this cause page and it resumes where it left off
+          (donors already emailed are never emailed twice).
         </p>
       </div>
 
@@ -161,7 +231,7 @@ export default function AnnouncementPanel(props: Props) {
               <p className="text-sm font-semibold text-ink">Send announcement to all donors</p>
               <p className="text-xs text-muted mt-0.5">
                 Will email <strong className="text-accent-700">{props.optedInDonorCount}</strong> opted-in donors.
-                Sent in batches of 50 every minute. <strong>Not reversible.</strong>
+                Sent in small batches with automatic retries. <strong>Not reversible.</strong>
               </p>
             </div>
             <div className="flex items-center justify-end">
@@ -180,6 +250,9 @@ export default function AnnouncementPanel(props: Props) {
 
       {error && (
         <p className="text-sm text-accent-700 bg-accent-50 border border-accent-200 rounded-lg px-3 py-2">{error}</p>
+      )}
+      {note && active && (
+        <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">{note}</p>
       )}
 
       {active && (
@@ -202,9 +275,11 @@ export default function AnnouncementPanel(props: Props) {
 function ProgressRow({ row, highlight }: { row: AnnouncementProgress; highlight: boolean }) {
   const done = row.successCount + row.failureCount;
   const pct = row.totalRecipients > 0 ? Math.round((done / row.totalRecipients) * 100) : 0;
+  const remaining = row.pendingCount ?? Math.max(0, row.totalRecipients - done);
   const statusText =
     row.status === "PENDING" ? "Starting…"
-    : row.status === "SENDING" ? `Sending… ${done} / ${row.totalRecipients}`
+    : row.status === "SENDING"
+        ? `Sending… ${row.successCount} sent${row.failureCount > 0 ? ` · ${row.failureCount} failed` : ""} · ${remaining} to go (of ${row.totalRecipients})`
     : row.status === "COMPLETED" ? `Completed · ${row.successCount} delivered${row.failureCount > 0 ? ` · ${row.failureCount} failed` : ""}`
     : "Cancelled";
   // Open / click rates are computed against the number we actually delivered,
