@@ -49,9 +49,16 @@ const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ESCAPE[c]);
 export type AnnouncementCauseInput = {
   slug: string;
   title: string;
-  summary: string;          // already chosen by caller (summary or contentHtml fallback)
+  // The FIRST paragraph of the cause page's opening narrative (the earliest
+  // timeline entry, else the summary). Chosen by the caller via firstParagraph().
+  summary: string;
   featuredImage: string | null;
+  goalAmount: number;       // the cause's fund-request goal, in INR rupees (0 = informational)
 };
+
+// Currency label for the fund-request line — rupee symbol + Indian digit grouping,
+// e.g. ₹50,000. Matches the site's inrShort/₹ convention.
+const fmtINR = (n: number) => `₹${Math.round(n).toLocaleString("en-IN")}`;
 
 /**
  * Renders the announcement HTML for one recipient. We re-render per recipient
@@ -91,11 +98,14 @@ export function renderAnnouncementHtml(opts: {
     ? `<img src="${opts.origin}/api/announcement/open/${opts.recipientId}" width="1" height="1" alt="" style="display:block;border:0;width:1px;height:1px;" />`
     : "";
 
-  // Body of the cause section: the new timeline entry text followed by a small
-  // pointer back to the full cause page. Paragraphs in the entry body are
-  // separated by blank lines; we preserve them as <br/><br/>.
-  const summaryBody = esc(opts.cause.summary).replace(/\r?\n\r?\n/g, "<br/><br/>").replace(/\n/g, "<br/>");
-  const summaryHtml = `${summaryBody}<br/><br/><em style="color:#6b6363;">(see the cause page for full details)</em>`;
+  // Body of the cause section: the first paragraph from the cause page. It's a
+  // single paragraph, so we only need to preserve any single line breaks within it.
+  const summaryHtml = esc(opts.cause.summary).replace(/\n/g, "<br/>");
+  // Fund-request line shown immediately below the description. Skipped for
+  // informational-only causes (goal = 0), where a "₹0" figure would be wrong.
+  const fundLineHtml = opts.cause.goalAmount > 0
+    ? `<p style="margin:0 0 16px;font-size:15px;color:#1d1a1a;font-weight:600;">MicroCharity Approves Fund request of ${fmtINR(opts.cause.goalAmount)}</p>`
+    : "";
 
   return `<!doctype html>
 <html><body style="margin:0;padding:0;background:#f7f6f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#3b3838;">
@@ -127,6 +137,7 @@ export function renderAnnouncementHtml(opts: {
           <p style="margin:0 0 16px;font-size:14px;color:#3b3838;line-height:1.6;">
             ${summaryHtml}
           </p>
+          ${fundLineHtml}
           <p style="margin:0 0 24px;">
             <a href="${causeTrack}" style="display:inline-block;background:#cc2222;color:#ffffff;text-decoration:none;font-weight:600;padding:12px 28px;border-radius:6px;font-size:15px;">Donate Now</a>
           </p>
@@ -183,10 +194,14 @@ export function renderAnnouncementText(opts: {
   const causeUrl = `${opts.origin}/donations/${opts.cause.slug}`;
   const supportUrl = `${opts.origin}/donations/support-microcharity`;
   const unsubUrl = `${opts.origin}/unsubscribe?email=${encodeURIComponent(opts.recipientEmail)}&token=${opts.unsubscribeToken}`;
+  const fundLine = opts.cause.goalAmount > 0
+    ? `MicroCharity Approves Fund request of ${fmtINR(opts.cause.goalAmount)}\n\n`
+    : "";
   return (
     `MicroCharity Announces Support for a new cause\n\n` +
     `${opts.cause.title}\n${causeUrl}\n\n` +
     `${opts.cause.summary}\n\n` +
+    fundLine +
     `Donate now: ${causeUrl}\n\n` +
     `---\n\n` +
     `Support MicroCharity (${supportUrl})\n\n` +
@@ -269,11 +284,12 @@ export async function processNextBatch(announcementId: string, opts: { origin: s
       cause: {
         select: {
           title: true, slug: true, summary: true, featuredImage: true, contentHtml: true,
-          // Pull the cause's latest timeline entry — for follow-up causes this is the
-          // freshly-added "new entry" that the admin wrote when continuing the
-          // campaign. We use its body as the email's narrative.
+          goalAmount: true,
+          // Pull the cause's FIRST timeline entry (sortOrder asc) — that's the
+          // opening narrative a visitor reads at the top of the public cause page.
+          // We use the first paragraph of its body as the email's description.
           updates: {
-            orderBy: { sortOrder: "desc" },
+            orderBy: { sortOrder: "asc" },
             take: 1,
             select: { body: true },
           },
@@ -312,8 +328,9 @@ export async function processNextBatch(announcementId: string, opts: { origin: s
   const causeInput: AnnouncementCauseInput = {
     slug: a.cause.slug,
     title: a.cause.title,
-    summary: pickSummary({ summary: a.cause.summary, contentHtml: a.cause.contentHtml, latestUpdateBody: a.cause.updates[0]?.body ?? null }),
+    summary: firstParagraph({ summary: a.cause.summary, contentHtml: a.cause.contentHtml, firstUpdateBody: a.cause.updates[0]?.body ?? null }),
     featuredImage: a.cause.featuredImage,
+    goalAmount: a.cause.goalAmount,
   };
 
   let sent = 0;
@@ -371,24 +388,35 @@ export async function processNextBatch(announcementId: string, opts: { origin: s
   return { processed: batch.length, sent, failed, remaining, status: finalStatus };
 }
 
-// Pick the narrative text for the announcement body. Order of preference:
-//   1. The cause's latest timeline entry body — that's the fresh "new entry"
-//      the admin just wrote when continuing a campaign (the most common case).
-//   2. Cause.summary if it has at least ~80 chars (a real paragraph).
+// Return just the leading paragraph of a block of body text — split on a blank
+// line (the same paragraph delimiter the public cause page uses) and take the
+// first non-empty chunk.
+function leadingParagraph(text: string): string {
+  return text
+    .split(/\r?\n\r?\n/)
+    .map((p) => p.trim())
+    .find((p) => p.length > 0) ?? text.trim();
+}
+
+// Pick the FIRST paragraph shown at the top of the public cause page, for use as
+// the announcement body. Order of preference mirrors what the page renders first:
+//   1. The cause's first timeline entry body (sortOrder asc) — the opening narrative.
+//   2. Cause.summary.
 //   3. First paragraph of contentHtml stripped of tags.
 //   4. Fallback string pointing to the cause page.
-function pickSummary(c: { summary: string | null; contentHtml: string | null; latestUpdateBody: string | null }): string {
-  const latest = (c.latestUpdateBody ?? "").trim();
-  if (latest) return latest;
+// In every case only the leading paragraph is returned.
+function firstParagraph(c: { summary: string | null; contentHtml: string | null; firstUpdateBody: string | null }): string {
+  const first = (c.firstUpdateBody ?? "").trim();
+  if (first) return leadingParagraph(first);
   const s = (c.summary ?? "").trim();
-  if (s.length >= 80) return s;
+  if (s) return leadingParagraph(s);
   const html = (c.contentHtml ?? "").trim();
   if (html) {
     const firstPara = html.split(/<\/p>/i)[0] ?? html;
-    const text = firstPara.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
-    if (text.length > s.length) return text;
+    const textOnly = firstPara.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+    if (textOnly) return textOnly;
   }
-  return s || "(see the cause page for full details)";
+  return "(see the cause page for full details)";
 }
 
 // Used as a Prisma include shape elsewhere if needed.
