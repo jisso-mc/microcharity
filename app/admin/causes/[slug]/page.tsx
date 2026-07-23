@@ -64,9 +64,14 @@ export default async function AdminCauseDetailPage({ params }: { params: Promise
               {cause.location && <span>📍 {cause.location}</span>}
             </div>
           </div>
-          <Link href={`/donations/${cause.slug}`} target="_blank" className="text-sm font-semibold text-accent-600 hover:text-accent-700">
-            View public page →
-          </Link>
+          <div className="flex items-center gap-4">
+            <Link href={`/admin/causes/${cause.slug}/edit`} className="text-sm font-semibold text-accent-600 hover:text-accent-700">
+              Edit details
+            </Link>
+            <Link href={`/donations/${cause.slug}`} target="_blank" className="text-sm font-semibold text-accent-600 hover:text-accent-700">
+              View public page →
+            </Link>
+          </div>
         </div>
       </div>
 

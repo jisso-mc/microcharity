@@ -110,6 +110,12 @@ export default function CauseRowMenu({
             description="Continue this campaign as a new round."
           />
           <MenuLink
+            href={`/admin/causes/${slug}/edit`}
+            label="Edit details"
+            onClick={() => setOpen(false)}
+            description="Title, slug, goal, image, date, place."
+          />
+          <MenuLink
             href={`/admin/causes/${slug}`}
             label="Edit page"
             onClick={() => setOpen(false)}

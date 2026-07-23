@@ -338,6 +338,126 @@ export async function createCauseAction(_prev: CauseFormState, formData: FormDat
   redirect(`/admin/causes?created=${created.slug}`);
 }
 
+// Edit the core details of an existing cause — the fields that were previously
+// only settable at create time (title, slug, goal, featured image, start date,
+// place, beneficiary group, category, summary). Timeline entries, status, and
+// announcements are managed separately on the cause detail page; this action
+// deliberately does NOT touch them.
+//
+// Slug is editable, but changing it changes the public URL (/donations/<slug>).
+// Any external links to the old slug will 404 unless a redirect is added in
+// next.config.mjs — the form warns the admin about this. We revalidate both the
+// old and new public paths so caches don't serve stale copies at either URL.
+export type EditCauseFormState = { error?: string; ok?: true };
+
+export async function updateCauseAction(_prev: EditCauseFormState, formData: FormData): Promise<EditCauseFormState> {
+  const user = await requireAdmin();
+
+  const id = String(formData.get("id") ?? "").trim();
+  if (!id) return { error: "Missing cause reference." };
+
+  const title = String(formData.get("title") ?? "").trim();
+  const slugRaw = String(formData.get("slug") ?? "").trim();
+  const summary = String(formData.get("summary") ?? "").trim();
+  let image = String(formData.get("image") ?? "").trim(); // existing URL, kept unless a new file is uploaded
+  const goalRaw = String(formData.get("goal") ?? "").trim();
+  const beneficiaryKey = String(formData.get("beneficiaryKey") ?? "").trim();
+  const category = String(formData.get("category") ?? "").trim();
+  const location = String(formData.get("location") ?? "").trim();
+  const dateRaw = String(formData.get("date") ?? "").trim();
+
+  if (!title) return { error: "Title is required." };
+  if (!slugRaw) return { error: "URL slug is required." };
+
+  const slug = slugify(slugRaw);
+  if (!slug) return { error: "Slug must contain at least one letter or number." };
+
+  const goal = goalRaw ? Number(goalRaw) : 0;
+  if (goalRaw && (!Number.isFinite(goal) || goal < 0)) return { error: "Goal must be a positive number." };
+
+  let startDate: Date | null | undefined = undefined; // undefined = leave unchanged
+  if (dateRaw) {
+    const d = new Date(`${dateRaw}T12:00:00.000Z`);
+    if (Number.isNaN(d.getTime())) return { error: "Invalid start date." };
+    startDate = d;
+  }
+
+  const existing = await prisma.cause.findUnique({
+    where: { id },
+    select: { id: true, slug: true, title: true, featuredImage: true },
+  });
+  if (!existing) return { error: "Cause not found." };
+
+  // Slug uniqueness — only when it actually changed, and excluding this cause.
+  if (slug !== existing.slug) {
+    const clash = await prisma.cause.findUnique({ where: { slug }, select: { id: true } });
+    if (clash && clash.id !== id) return { error: `A cause with slug "${slug}" already exists. Pick a different one.` };
+  }
+
+  // Featured image: a freshly-uploaded file wins; otherwise keep the URL that
+  // came through the hidden input (the current image, or a cleared/empty value).
+  const featuredImageFile = formData.get("featuredImageFile");
+  if (featuredImageFile instanceof File && featuredImageFile.size > 0) {
+    const MAX = 2 * 1024 * 1024; // 2 MB
+    const ALLOWED = ["image/jpeg", "image/png", "image/webp"];
+    if (featuredImageFile.size > MAX) return { error: "Featured image is larger than 2 MB. Please compress and try again." };
+    if (featuredImageFile.type && !ALLOWED.includes(featuredImageFile.type)) {
+      return { error: "Featured image must be JPG, PNG, or WebP." };
+    }
+    try {
+      const ext = featuredImageFile.name.includes(".") ? featuredImageFile.name.slice(featuredImageFile.name.lastIndexOf(".")) : "";
+      // addRandomSuffix keeps the URL unguessable and avoids clobbering the prior
+      // image, so the old featured URL (if cached anywhere) stays valid.
+      const blob = await put(`causes/${slug}/featured${ext}`, featuredImageFile, {
+        access: "public",
+        addRandomSuffix: true,
+        contentType: featuredImageFile.type || "image/jpeg",
+      });
+      image = blob.url;
+    } catch (e) {
+      console.error("[causes/update] image upload failed", e);
+      return { error: "Could not upload the featured image. Try again or keep the existing one." };
+    }
+  }
+
+  await prisma.cause.update({
+    where: { id },
+    data: {
+      title,
+      slug,
+      summary: summary || null,
+      featuredImage: image || null,
+      goalAmount: Math.round(goal),
+      beneficiaryKey: beneficiaryKey || null,
+      category: category || null,
+      location: location || null,
+      ...(startDate !== undefined ? { startDate } : {}),
+    },
+  });
+
+  await audit({
+    action: "cause.update",
+    userId: user.userId,
+    entityType: "Cause",
+    entityId: id,
+    payload: { slug, previousSlug: existing.slug, title },
+  });
+
+  // Revalidate admin + every public surface, at BOTH the old and new slug so a
+  // renamed cause serves fresh content at the new URL and doesn't leave a stale
+  // page cached at the old one.
+  revalidatePath("/admin/causes");
+  revalidatePath(`/admin/causes/${existing.slug}`);
+  revalidatePath(`/admin/causes/${slug}`);
+  revalidatePath("/");
+  revalidatePath("/current-causes");
+  revalidatePath("/success-stories");
+  revalidatePath(`/donations/${existing.slug}`);
+  revalidatePath(`/donations/${slug}`);
+
+  redirect(`/admin/causes/${slug}?updated=1`);
+}
+
 export async function setCauseStatusAction(formData: FormData) {
   await requireAdmin();
   const id = String(formData.get("id"));
