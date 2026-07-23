@@ -2,7 +2,7 @@
 
 ## 1. Push to GitHub
 
-The repo is already initialized with the remote pointing at `github.com/nanzwilly/microcharity`. Push it:
+The repo is already initialized with the remote pointing at `github.com/jisso-mc/microcharity`. Push it:
 
 ```bash
 cd D:\Projects\microcharity
@@ -20,19 +20,24 @@ git push -u origin main --force
 ## 2. Connect to Vercel
 
 1. Go to https://vercel.com/new
-2. **Import Git Repository** → pick `nanzwilly/microcharity`
+2. **Import Git Repository** → pick `jisso-mc/microcharity`
 3. Framework preset will auto-detect as **Next.js** — leave defaults
 4. **Environment Variables** — paste each of the values below before clicking Deploy
 5. Click **Deploy**. First build takes ~2 minutes.
 
 ## 3. Environment variables (paste into Vercel)
 
+> **Do not commit real secret values to this file.** The canonical source of
+> truth for production secrets is **Vercel → Project Settings → Environment
+> Variables** (and `.env.local`, which is gitignored, for local dev). The
+> placeholders below describe the shape of each value only.
+
 Required:
 
 | Name | Value |
 |---|---|
-| `DATABASE_URL` | `postgresql://neondb_owner:npg_idAHTyWQs1w5@ep-green-credit-aoq6f8p8-pooler.c-2.ap-southeast-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require` |
-| `ADMIN_SESSION_SECRET` | `uymh8WaiqdDRv24lqgj4CYWSJMcI335liFWtQ6iajJUQo56YNG9eak4qQRljJTrT` |
+| `DATABASE_URL` | `postgresql://<user>:<password>@<host>.ap-southeast-1.aws.neon.tech/<db>?sslmode=require&channel_binding=require` (from Neon dashboard) |
+| `ADMIN_SESSION_SECRET` | random string, ≥32 chars (e.g. `openssl rand -base64 48`) |
 
 Optional — fill in to enable the contact / refer-a-cause emails:
 

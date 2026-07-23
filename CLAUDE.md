@@ -37,7 +37,7 @@ exists). Edit `prisma/schema.prisma`, run `npm run db:push`, then
 ## Local setup
 
 ```bash
-git clone https://github.com/nanzwilly/microcharity.git
+git clone https://github.com/jisso-mc/microcharity.git
 cd microcharity
 npm install
 cp .env.example .env.local   # then fill in secrets — see "Secrets" below
