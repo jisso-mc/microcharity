@@ -49,7 +49,10 @@ export default function AnnouncementPanel(props: Props) {
   const [testEmails, setTestEmails] = useState(props.currentUserEmail);
   // Grouped failure reasons for the active send (populated when failureCount > 0).
   const [failures, setFailures] = useState<FailureReason[]>([]);
-  const [retrying, setRetrying] = useState(false);
+  // Failure reasons for non-active (history) rows, keyed by announcement id.
+  const [historyFailures, setHistoryFailures] = useState<Record<string, FailureReason[]>>({});
+  // Which announcement is currently being requeued (null = none).
+  const [retryingId, setRetryingId] = useState<string | null>(null);
 
   // The loop should run only while there's an active send with work left. Keying
   // the effect on this (rather than the raw id) means: it starts when a send goes
@@ -132,27 +135,53 @@ export default function AnnouncementPanel(props: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loopKey]);
 
-  // Requeue failed recipients and let the driver loop re-send them.
-  async function retryFailed() {
-    if (!active) return;
-    const n = active.failureCount;
+  // Lazily fetch failure reasons for finished (history) sends that had failures,
+  // so their breakdown + Retry button work the same as the active one.
+  useEffect(() => {
+    const rows = history.filter((h) => h.failureCount > 0 && h.id !== active?.id && !historyFailures[h.id]);
+    if (rows.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      for (const r of rows) {
+        try {
+          const res = await fetch(`/api/cause-announcements/${r.id}/process`, { method: "GET" });
+          const j = await res.json().catch(() => null);
+          if (!cancelled && Array.isArray(j?.failures)) {
+            setHistoryFailures((m) => ({ ...m, [r.id]: j.failures }));
+          }
+        } catch {
+          /* ignore — button still works without the reason list */
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [history, active?.id]);
+
+  // Requeue failed recipients of one announcement and let the driver loop re-send
+  // them. Works for both the active send and any finished one in history.
+  async function retryFailed(id: string, failureCount: number) {
     if (!confirm(
-      `Retry ${n} failed send${n === 1 ? "" : "s"}?\n\n` +
+      `Retry ${failureCount} failed send${failureCount === 1 ? "" : "s"}?\n\n` +
       `This re-attempts only recipients marked failed. Donors already delivered are NOT emailed again. ` +
       `If the failures were due to email rate limits, wait a while before retrying.`
     )) return;
-    setRetrying(true);
+    setRetryingId(id);
     setError(null);
     try {
-      const res = await fetch(`/api/cause-announcements/${active.id}/retry`, { method: "POST" });
+      const res = await fetch(`/api/cause-announcements/${id}/retry`, { method: "POST" });
       const j = await res.json().catch(() => null);
       if (!res.ok || !j?.announcement) throw new Error(j?.error ?? "Could not requeue.");
       setFailures([]);
-      setActive(j.announcement); // status flips to SENDING → loop restarts and drains
+      setHistoryFailures((m) => { const n = { ...m }; delete n[id]; return n; });
+      // Promote it to the active send (status is now SENDING) so the driver loop
+      // restarts and drains it; it also moves out of the History list.
+      setActive(j.announcement);
+      setHistory((h) => h.map((row) => (row.id === id ? j.announcement : row)));
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not requeue failed sends.");
     } finally {
-      setRetrying(false);
+      setRetryingId(null);
     }
   }
 
@@ -286,50 +315,27 @@ export default function AnnouncementPanel(props: Props) {
       )}
 
       {active && (
-        <div className="space-y-2">
-          <ProgressRow row={active} highlight={true} />
-
-          {active.failureCount > 0 && (
-            <div className="rounded-lg border border-amber-200 bg-amber-50/60 p-3 space-y-2">
-              <div className="flex items-center justify-between gap-3">
-                <p className="text-sm font-semibold text-amber-800">
-                  {active.failureCount} send{active.failureCount === 1 ? "" : "s"} failed
-                </p>
-                {(active.status === "COMPLETED" || active.status === "SENDING") && (
-                  <button
-                    type="button"
-                    onClick={retryFailed}
-                    disabled={retrying}
-                    className="rounded-full bg-amber-600 text-white text-xs font-semibold px-3 py-1.5 hover:bg-amber-700 transition disabled:opacity-60"
-                  >
-                    {retrying ? "Requeuing…" : "Retry failed"}
-                  </button>
-                )}
-              </div>
-              {failures.length > 0 && (
-                <ul className="space-y-1">
-                  {failures.map((f, i) => (
-                    <li key={i} className="text-xs text-amber-900/90 flex gap-2">
-                      <span className="font-mono font-semibold whitespace-nowrap">×{f.count}</span>
-                      <span className="break-words">{f.reason}</span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-              <p className="text-[11px] text-amber-700/80">
-                Failures are usually email rate limits (Gmail throttling a bulk send). Retrying re-sends only the failed
-                ones — donors already delivered are not emailed again.
-              </p>
-            </div>
-          )}
-        </div>
+        <ProgressRow
+          row={active}
+          highlight={true}
+          failures={failures}
+          onRetry={() => retryFailed(active.id, active.failureCount)}
+          retrying={retryingId === active.id}
+        />
       )}
 
       {history.filter((h) => h.id !== active?.id).length > 0 && (
         <div className="space-y-2">
           <p className="text-xs uppercase tracking-wider text-muted font-semibold">History</p>
           {history.filter((h) => h.id !== active?.id).map((row) => (
-            <ProgressRow key={row.id} row={row} highlight={false} />
+            <ProgressRow
+              key={row.id}
+              row={row}
+              highlight={false}
+              failures={historyFailures[row.id] ?? []}
+              onRetry={() => retryFailed(row.id, row.failureCount)}
+              retrying={retryingId === row.id}
+            />
           ))}
         </div>
       )}
@@ -338,7 +344,19 @@ export default function AnnouncementPanel(props: Props) {
   );
 }
 
-function ProgressRow({ row, highlight }: { row: AnnouncementProgress; highlight: boolean }) {
+function ProgressRow({
+  row,
+  highlight,
+  failures = [],
+  onRetry,
+  retrying = false,
+}: {
+  row: AnnouncementProgress;
+  highlight: boolean;
+  failures?: FailureReason[];
+  onRetry?: () => void;
+  retrying?: boolean;
+}) {
   const done = row.successCount + row.failureCount;
   const pct = row.totalRecipients > 0 ? Math.round((done / row.totalRecipients) * 100) : 0;
   const remaining = row.pendingCount ?? Math.max(0, row.totalRecipients - done);
@@ -377,6 +395,40 @@ function ProgressRow({ row, highlight }: { row: AnnouncementProgress; highlight:
         <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted">
           <span><strong className="text-ink">{row.openCount}</strong> opened ({openPct}%)</span>
           <span><strong className="text-ink">{row.clickCount}</strong> clicked ({clickPct}%)</span>
+        </div>
+      )}
+
+      {row.failureCount > 0 && (
+        <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50/60 p-3 space-y-2">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-sm font-semibold text-amber-800">
+              {row.failureCount} send{row.failureCount === 1 ? "" : "s"} failed
+            </p>
+            {onRetry && (row.status === "COMPLETED" || row.status === "SENDING") && (
+              <button
+                type="button"
+                onClick={onRetry}
+                disabled={retrying}
+                className="rounded-full bg-amber-600 text-white text-xs font-semibold px-3 py-1.5 hover:bg-amber-700 transition disabled:opacity-60"
+              >
+                {retrying ? "Requeuing…" : "Retry failed"}
+              </button>
+            )}
+          </div>
+          {failures.length > 0 && (
+            <ul className="space-y-1">
+              {failures.map((f, i) => (
+                <li key={i} className="text-xs text-amber-900/90 flex gap-2">
+                  <span className="font-mono font-semibold whitespace-nowrap">×{f.count}</span>
+                  <span className="break-words">{f.reason}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+          <p className="text-[11px] text-amber-700/80">
+            Failures are usually email rate limits (Gmail throttling a bulk send). Retrying re-sends only the failed
+            ones — donors already delivered are not emailed again.
+          </p>
         </div>
       )}
     </div>
