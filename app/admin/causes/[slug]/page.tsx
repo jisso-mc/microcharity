@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/session";
 import { inrShort } from "@/lib/format";
+import { ANNOUNCEMENT_DAILY_LIMIT } from "@/lib/announcements";
 import CauseStatusButton from "../CauseStatusButton";
 import AnnouncementPanel from "./AnnouncementPanel";
 import AddTimelineEntryForm from "./AddTimelineEntryForm";
@@ -142,6 +143,7 @@ export default async function AdminCauseDetailPage({ params }: { params: Promise
               optedInDonorCount={optedInDonorCount}
               currentUserEmail={me.email}
               history={announcements}
+              dailyLimit={ANNOUNCEMENT_DAILY_LIMIT}
             />
           </div>
         </div>

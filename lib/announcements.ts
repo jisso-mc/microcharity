@@ -33,6 +33,43 @@ const INTER_MESSAGE_MS = 120;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+// Resend's free tier allows 100 emails/day account-wide. We cap announcement sends
+// below that (default 90) so transactional email (80G receipts, donation acks,
+// contact forms) still has headroom on a day we're broadcasting. Override with the
+// ANNOUNCEMENT_DAILY_LIMIT env var. A send larger than this is spread across days
+// by the daily cron.
+export const ANNOUNCEMENT_DAILY_LIMIT = Math.max(1, Number(process.env.ANNOUNCEMENT_DAILY_LIMIT || 90));
+
+// Hour (UTC) at which the daily cron drains the next batch. MUST stay in sync with
+// the schedule in vercel.json ("0 3 * * *"). 03:00 UTC = 08:30 IST.
+export const CRON_HOUR_UTC = 3;
+
+// A batch lock older than this is treated as stale (its worker crashed) and can be
+// reclaimed. Comfortably longer than BATCH_TIME_BUDGET_MS.
+const LOCK_STALE_MS = 3 * 60_000;
+
+function utcDayStart(now: Date): Date {
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+}
+
+/** Emails successfully SENT across ALL announcements since 00:00 UTC today — the
+ *  figure that counts against Resend's per-day quota. */
+export async function sentTodayCount(now = new Date()): Promise<number> {
+  return prisma.announcementRecipient.count({
+    where: { status: "SENT", sentAt: { gte: utcDayStart(now) } },
+  });
+}
+
+/** The next daily-cron run (CRON_HOUR_UTC:00 UTC) strictly after `now`. */
+export function nextCronRun(now = new Date()): Date {
+  const todayRun = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), CRON_HOUR_UTC, 0, 0));
+  return todayRun > now ? todayRun : new Date(todayRun.getTime() + 24 * 60 * 60 * 1000);
+}
+
+// A Resend failure that means "you've hit a limit" — used to stop the run early
+// rather than burn attempts against a wall.
+const isQuotaError = (reason: string) => /quota|rate|limit|429|too many|daily/i.test(reason);
+
 // HMAC secret reused from ADMIN_SESSION_SECRET (already enforced ≥32 chars). Same
 // key for every recipient; the donorEmail is the distinguishing input.
 function unsubSecret(): Buffer {
@@ -297,6 +334,13 @@ export type AnnouncementProgress = {
   isTest: boolean;
   startedAt: string;
   completedAt: string | null;
+  // Daily-quota scheduling context (Resend free-tier spreads big sends over days).
+  dailyLimit: number;        // max emails/day for announcements
+  sentToday: number;         // emails sent today (all announcements, counts toward the limit)
+  remainingToday: number;    // quota left today
+  pausedForQuota: boolean;   // pending remain but today's quota is used up
+  nextBatchAt: string | null;// ISO time the daily cron will send the next batch (when paused)
+  estRemainingDays: number;  // rough days of sending left for this announcement
 };
 
 // Count recipients by status straight from the AnnouncementRecipient rows. These
@@ -331,6 +375,14 @@ export async function getAnnouncementProgress(announcementId: string): Promise<A
   });
   if (!a) return null;
   const c = await recipientCounts(announcementId);
+  const now = new Date();
+  const sentToday = await sentTodayCount(now);
+  const remainingToday = Math.max(0, ANNOUNCEMENT_DAILY_LIMIT - sentToday);
+  const active = a.status === "SENDING" || a.status === "PENDING";
+  const pausedForQuota = active && c.pending > 0 && remainingToday <= 0;
+  const estRemainingDays = c.pending > 0
+    ? Math.max(1, Math.ceil(Math.max(0, c.pending - remainingToday) / ANNOUNCEMENT_DAILY_LIMIT) + (remainingToday > 0 ? 0 : 1))
+    : 0;
   return {
     id: a.id,
     subject: a.subject,
@@ -344,6 +396,12 @@ export async function getAnnouncementProgress(announcementId: string): Promise<A
     isTest: a.isTest,
     startedAt: a.startedAt.toISOString(),
     completedAt: a.completedAt?.toISOString() ?? null,
+    dailyLimit: ANNOUNCEMENT_DAILY_LIMIT,
+    sentToday,
+    remainingToday,
+    pausedForQuota,
+    nextBatchAt: pausedForQuota ? nextCronRun(now).toISOString() : null,
+    estRemainingDays,
   };
 }
 
@@ -452,63 +510,99 @@ export async function processNextBatch(announcementId: string, opts: { origin: s
   // reconciled snapshot either way so callers always get consistent numbers.
   if (a.status === "CANCELLED") return (await getAnnouncementProgress(announcementId))!;
 
-  // Flip PENDING → SENDING up front so the UI shows "sending" immediately.
-  if (a.status === "PENDING") {
-    await prisma.causeAnnouncement.update({
-      where: { id: announcementId },
-      data: { status: "SENDING" },
-    });
+  // ---- Acquire the batch lock ----
+  // Atomically claim this announcement so a browser-driven run and the daily cron
+  // (or two tabs) can't send the same recipients concurrently. Reclaimable if the
+  // previous holder crashed (stale lock).
+  const now = new Date();
+  const staleBefore = new Date(now.getTime() - LOCK_STALE_MS);
+  const claim = await prisma.causeAnnouncement.updateMany({
+    where: {
+      id: announcementId,
+      status: { notIn: ["CANCELLED", "COMPLETED"] },
+      OR: [{ lockedAt: null }, { lockedAt: { lt: staleBefore } }],
+    },
+    data: { lockedAt: now },
+  });
+  if (claim.count === 0) {
+    // Another worker holds the lock (or it's already done) — just report current state.
+    return (await getAnnouncementProgress(announcementId))!;
   }
 
-  const causeInput: AnnouncementCauseInput = {
-    slug: a.cause.slug,
-    title: a.cause.title,
-    summary: firstParagraph({ summary: a.cause.summary, contentHtml: a.cause.contentHtml, firstUpdateBody: a.cause.updates[0]?.body ?? null }),
-    featuredImage: a.cause.featuredImage,
-    goalAmount: a.cause.goalAmount,
-  };
+  try {
+    // Flip PENDING → SENDING up front so the UI shows "sending" immediately.
+    if (a.status === "PENDING") {
+      await prisma.causeAnnouncement.update({ where: { id: announcementId }, data: { status: "SENDING" } });
+    }
 
-  const deadline = Date.now() + BATCH_TIME_BUDGET_MS;
+    // Today's remaining quota (shared across all announcements). If exhausted, do
+    // nothing this run — the daily cron picks it up tomorrow.
+    let quotaLeft = Math.max(0, ANNOUNCEMENT_DAILY_LIMIT - (await sentTodayCount(now)));
+    if (quotaLeft <= 0) {
+      return await reconcile(announcementId);
+    }
 
-  // Time-boxed drain loop. Re-query PENDING in small chunks so we always see the
-  // latest state and write progress frequently.
-  while (Date.now() < deadline) {
-    const chunk = await prisma.announcementRecipient.findMany({
-      where: { announcementId, status: "PENDING" },
-      take: SEND_CHUNK,
-      orderBy: { id: "asc" },
-    });
-    if (chunk.length === 0) break; // nothing left — done
+    const causeInput: AnnouncementCauseInput = {
+      slug: a.cause.slug,
+      title: a.cause.title,
+      summary: firstParagraph({ summary: a.cause.summary, contentHtml: a.cause.contentHtml, firstUpdateBody: a.cause.updates[0]?.body ?? null }),
+      featuredImage: a.cause.featuredImage,
+      goalAmount: a.cause.goalAmount,
+    };
 
-    for (const r of chunk) {
-      if (Date.now() >= deadline) break; // out of time — stop cleanly, rest stays PENDING
-      try {
-        const html = renderAnnouncementHtml({ cause: causeInput, origin: opts.origin, recipientEmail: r.donorEmail, unsubscribeToken: r.unsubscribeToken, recipientId: r.id });
-        const text = renderAnnouncementText({ cause: causeInput, origin: opts.origin, recipientEmail: r.donorEmail, unsubscribeToken: r.unsubscribeToken });
-        const result = await sendEmail({ to: r.donorEmail, subject: safeHeader(a.subject), html, text });
-        await prisma.announcementRecipient.update({
-          where: { id: r.id },
-          data: result.ok
-            ? { status: "SENT", sentAt: new Date(), error: null }
-            : { status: "FAILED", error: result.reason.slice(0, 500) },
-        });
-      } catch (e) {
-        // Any unexpected failure (SMTP timeout, bad address, DB blip on this row)
-        // is isolated to this recipient — record it and keep going.
+    const deadline = Date.now() + BATCH_TIME_BUDGET_MS;
+
+    // Time-boxed drain loop, capped by today's quota. Re-query PENDING in small
+    // chunks so we always see the latest state and write progress frequently.
+    while (Date.now() < deadline && quotaLeft > 0) {
+      const chunk = await prisma.announcementRecipient.findMany({
+        where: { announcementId, status: "PENDING" },
+        take: Math.min(SEND_CHUNK, quotaLeft),
+        orderBy: { id: "asc" },
+      });
+      if (chunk.length === 0) break; // nothing left — done
+
+      for (const r of chunk) {
+        if (Date.now() >= deadline || quotaLeft <= 0) break;
         try {
+          const html = renderAnnouncementHtml({ cause: causeInput, origin: opts.origin, recipientEmail: r.donorEmail, unsubscribeToken: r.unsubscribeToken, recipientId: r.id });
+          const text = renderAnnouncementText({ cause: causeInput, origin: opts.origin, recipientEmail: r.donorEmail, unsubscribeToken: r.unsubscribeToken });
+          const result = await sendEmail({ to: r.donorEmail, subject: safeHeader(a.subject), html, text });
           await prisma.announcementRecipient.update({
             where: { id: r.id },
-            data: { status: "FAILED", error: (e instanceof Error ? e.message : String(e)).slice(0, 500) },
+            data: result.ok
+              ? { status: "SENT", sentAt: new Date(), error: null }
+              : { status: "FAILED", error: result.reason.slice(0, 500) },
           });
-        } catch (inner) {
-          console.error("[announcements] failed to mark recipient FAILED", r.id, inner);
+          if (result.ok) {
+            quotaLeft--; // only successful sends consume the daily quota
+          } else if (isQuotaError(result.reason)) {
+            // Provider says we've hit a limit — stop now; the row is marked FAILED
+            // and will be retried on a later day/run.
+            quotaLeft = 0;
+            break;
+          }
+        } catch (e) {
+          // Any unexpected failure (SMTP timeout, bad address, DB blip on this row)
+          // is isolated to this recipient — record it and keep going.
+          try {
+            await prisma.announcementRecipient.update({
+              where: { id: r.id },
+              data: { status: "FAILED", error: (e instanceof Error ? e.message : String(e)).slice(0, 500) },
+            });
+          } catch (inner) {
+            console.error("[announcements] failed to mark recipient FAILED", r.id, inner);
+          }
         }
+        await sleep(INTER_MESSAGE_MS);
       }
-      await sleep(INTER_MESSAGE_MS);
     }
-  }
 
-  return reconcile(announcementId);
+    return await reconcile(announcementId);
+  } finally {
+    // Always release the lock, even if something threw.
+    await prisma.causeAnnouncement.update({ where: { id: announcementId }, data: { lockedAt: null } }).catch(() => {});
+  }
 }
 
 // Return just the leading paragraph of a block of body text — split on a blank

@@ -1,0 +1,8 @@
+{
+  "crons": [
+    {
+      "path": "/api/cause-announcements/cron",
+      "schedule": "0 3 * * *"
+    }
+  ]
+}

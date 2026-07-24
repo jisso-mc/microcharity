@@ -15,6 +15,15 @@ type AnnouncementProgress = {
   startedAt: string;
   completedAt: string | null;
   subject: string;
+  // Daily-quota scheduling (Resend free tier spreads large sends over days).
+  // Optional because history rows rendered by the server page don't carry them;
+  // the live status/POST responses always do, and fill them in on first refresh.
+  dailyLimit?: number;
+  sentToday?: number;
+  remainingToday?: number;
+  pausedForQuota?: boolean;
+  nextBatchAt?: string | null;
+  estRemainingDays?: number;
 };
 
 type FailureReason = { reason: string; count: number };
@@ -28,7 +37,17 @@ type Props = {
   // They can edit / add more comma-separated addresses before sending.
   currentUserEmail: string;
   history: AnnouncementProgress[];
+  // Max announcement emails per day (Resend free-tier headroom). Larger sends
+  // spread across days via the daily cron.
+  dailyLimit: number;
 };
+
+// Format an ISO timestamp in IST for the "next batch" line.
+function fmtIST(iso: string): string {
+  return new Date(iso).toLocaleString("en-IN", {
+    timeZone: "Asia/Kolkata", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit",
+  }) + " IST";
+}
 
 // How often to (a) drive the next send batch and (b) refresh the live status.
 // The batch driver reschedules itself after each batch finishes, so this is the
@@ -115,7 +134,11 @@ export default function AnnouncementPanel(props: Props) {
           apply(j.announcement);
           if (Array.isArray(j.failures)) setFailures(j.failures);
           setNote(null);
-          terminal = j.announcement.status === "COMPLETED" || j.announcement.status === "CANCELLED";
+          // Stop driving when done/cancelled OR when today's quota is used up — the
+          // daily cron will send the next batch tomorrow (no open tab required).
+          terminal = j.announcement.status === "COMPLETED"
+            || j.announcement.status === "CANCELLED"
+            || j.announcement.pausedForQuota === true;
         } else {
           // Non-JSON or error body — surface softly and keep going.
           setNote("A send batch hit a snag — retrying automatically…");
@@ -211,7 +234,11 @@ export default function AnnouncementPanel(props: Props) {
       }
     } else {
       if (props.optedInDonorCount === 0) return;
-      if (!confirm(`Send the real launch announcement for "${props.causeTitle}" to ALL ${props.optedInDonorCount} opted-in donors?\n\nThis can't be undone. Donors who unsubscribe later will still get this email.`)) {
+      const days = Math.ceil(props.optedInDonorCount / props.dailyLimit);
+      const spread = props.optedInDonorCount > props.dailyLimit
+        ? `\n\nTo stay within the email plan's daily limit, this sends up to ${props.dailyLimit}/day and will finish in about ${days} days — it continues automatically each day (you don't need to keep this page open).`
+        : "";
+      if (!confirm(`Send the real launch announcement for "${props.causeTitle}" to ALL ${props.optedInDonorCount} opted-in donors?\n\nThis can't be undone. Donors who unsubscribe later will still get this email.${spread}`)) {
         return;
       }
     }
@@ -245,9 +272,9 @@ export default function AnnouncementPanel(props: Props) {
         <h2 className="font-display text-xl text-ink">Launch announcement</h2>
         <p className="text-sm text-muted mt-1">
           Email all {props.optedInDonorCount} opted-in donors that this cause is live.
-          Sent in small batches with automatic retries. <strong>Keep this page open</strong> while
-          it sends — if you close it, just reopen this cause page and it resumes where it left off
-          (donors already emailed are never emailed twice).
+          To stay within the email plan, up to <strong>{props.dailyLimit} emails/day</strong> go out;
+          a larger send continues <strong>automatically each day</strong> until done — you don&apos;t
+          need to keep this page open. Donors already emailed are never emailed twice.
         </p>
       </div>
 
@@ -289,8 +316,9 @@ export default function AnnouncementPanel(props: Props) {
             <div>
               <p className="text-sm font-semibold text-ink">Send announcement to all donors</p>
               <p className="text-xs text-muted mt-0.5">
-                Will email <strong className="text-accent-700">{props.optedInDonorCount}</strong> opted-in donors.
-                Sent in small batches with automatic retries. <strong>Not reversible.</strong>
+                Will email <strong className="text-accent-700">{props.optedInDonorCount}</strong> opted-in donors,
+                up to {props.dailyLimit}/day{props.optedInDonorCount > props.dailyLimit ? ` (~${Math.ceil(props.optedInDonorCount / props.dailyLimit)} days)` : ""}.
+                Continues automatically each day. <strong>Not reversible.</strong>
               </p>
             </div>
             <div className="flex items-center justify-end">
@@ -391,6 +419,27 @@ function ProgressRow({
         <div className="h-full bg-accent-600 rounded-full transition-all" style={{ width: `${pct}%` }} />
       </div>
       <p className="text-xs text-muted mt-1.5">{statusText}</p>
+
+      {(row.status === "SENDING" || row.status === "PENDING") && row.pendingCount > 0 && (
+        <div className="mt-2 text-xs">
+          {typeof row.sentToday === "number" && typeof row.dailyLimit === "number" && (
+            <p className="text-muted">Daily quota: {row.sentToday}/{row.dailyLimit} used today.</p>
+          )}
+          {row.pausedForQuota ? (
+            <p className="mt-1 inline-flex flex-wrap items-center gap-x-1.5 rounded-md bg-blue-50 border border-blue-200 text-blue-800 px-2 py-1">
+              ⏸ <strong>Daily limit reached.</strong> {row.pendingCount} still to send · next batch{" "}
+              <strong>{row.nextBatchAt ? fmtIST(row.nextBatchAt) : "tomorrow"}</strong>
+              {row.estRemainingDays && row.estRemainingDays > 0 ? ` · ~${row.estRemainingDays} day(s) to finish` : ""}
+            </p>
+          ) : (
+            <p className="mt-1 text-accent-700">
+              Sending now · {row.pendingCount} to go
+              {row.estRemainingDays && row.estRemainingDays > 1 ? ` · will finish in ~${row.estRemainingDays} days` : ""}
+            </p>
+          )}
+        </div>
+      )}
+
       {row.status === "COMPLETED" && delivered > 0 && (
         <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted">
           <span><strong className="text-ink">{row.openCount}</strong> opened ({openPct}%)</span>

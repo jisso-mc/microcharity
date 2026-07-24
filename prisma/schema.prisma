@@ -361,6 +361,11 @@ model CauseAnnouncement {
   startedAt       DateTime                 @default(now())
   completedAt     DateTime?
 
+  // Advisory lock so a batch run (browser-driven or the daily cron) can't overlap
+  // with another and double-send. Set when a worker starts a batch, cleared when it
+  // finishes; a stale lock (older than the batch time budget) is reclaimable.
+  lockedAt        DateTime?
+
   recipients      AnnouncementRecipient[]
 
   @@index([causeId])
