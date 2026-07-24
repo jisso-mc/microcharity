@@ -192,6 +192,46 @@ export async function findCampaign(
   return null;
 }
 
+// Build a plain-text excerpt for social/link previews (Open Graph / Twitter) and
+// meta descriptions. Most causes have an empty `summary` — the narrative lives in
+// the timeline entries — so we fall back to the first paragraph of the first
+// (earliest) entry, which is exactly what a visitor reads at the top of the page.
+// Markdown-style links are reduced to their label and whitespace is collapsed;
+// the result is truncated on a word boundary.
+export function causeExcerpt(
+  campaign: Pick<Campaign, "summary" | "updates" | "title">,
+  maxLen = 200
+): string {
+  const source =
+    (campaign.summary && campaign.summary.trim()) ||
+    firstParagraph(campaign.updates?.[0]?.body ?? "") ||
+    "";
+  const plain = source
+    // [label](https://url) -> label
+    .replace(/\[([^\]]+)\]\((?:https?:\/\/)?[^\s)]+\)/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!plain) {
+    // Last-resort: a generic but useful line so previews aren't blank.
+    return `Support "${campaign.title}" on MicroCharity — every contribution helps.`;
+  }
+  return truncate(plain, maxLen);
+}
+
+function firstParagraph(body: string): string {
+  return body
+    .split(/\r?\n\r?\n/)
+    .map((p) => p.trim())
+    .find((p) => p.length > 0) ?? body.trim();
+}
+
+function truncate(s: string, maxLen: number): string {
+  if (s.length <= maxLen) return s;
+  const clipped = s.slice(0, maxLen);
+  const lastSpace = clipped.lastIndexOf(" ");
+  return `${(lastSpace > maxLen * 0.6 ? clipped.slice(0, lastSpace) : clipped).trimEnd()}…`;
+}
+
 export async function getGrandTotalRaised(): Promise<number> {
   const r = await prisma.cause.aggregate({
     where: { status: { in: ["PUBLISHED", "CLOSED"] } },

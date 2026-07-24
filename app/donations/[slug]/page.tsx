@@ -1,7 +1,7 @@
 import { Fragment } from "react";
 import { notFound } from "next/navigation";
 import Link from "next/link";
-import { getAllCampaigns, findCampaign } from "@/lib/data/causes";
+import { getAllCampaigns, findCampaign, causeExcerpt } from "@/lib/data/causes";
 
 // Renders a single paragraph of cause body / summary text with inline
 // markdown-style links — `[label](https://url)` becomes a real <a>. Anything
@@ -55,21 +55,26 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
   const { campaign } = found;
   const path = `/donations/${slug}`;
   const images = campaign.image ? [campaign.image] : undefined;
+  // Excerpt for link previews (WhatsApp / Facebook / Twitter). Falls back to the
+  // first paragraph of the cause content when there's no summary, so previews
+  // always show meaningful text instead of just the image.
+  const description = causeExcerpt(campaign);
   return {
     title: campaign.title,
-    description: campaign.summary,
+    description,
     alternates: { canonical: path },
     openGraph: {
       title: campaign.title,
-      description: campaign.summary,
+      description,
       url: path,
       type: "article",
+      siteName: "MicroCharity",
       images,
     },
     twitter: {
       card: "summary_large_image",
       title: campaign.title,
-      description: campaign.summary,
+      description,
       images,
     },
   };
@@ -239,7 +244,7 @@ export default async function CausePage({ params }: { params: Promise<{ slug: st
               <ShareButtons
                 path={`/donations/${campaign.slug}`}
                 title={campaign.title}
-                text={campaign.summary}
+                text={causeExcerpt(campaign)}
               />
             </div>
 
