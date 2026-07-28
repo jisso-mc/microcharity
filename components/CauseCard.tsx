@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { headlineCampaign, type Beneficiary } from "@/lib/data/causes";
+import { headlineCampaign, causeExcerpt, type Beneficiary } from "@/lib/data/causes";
 import { inrShort } from "@/lib/format";
 
 interface Props { beneficiary: Beneficiary }
@@ -41,9 +41,10 @@ export default function CauseCard({ beneficiary }: Props) {
         {launched && (
           <p className="text-xs text-muted mb-2">{launched}</p>
         )}
-        {c.summary && (
-          <p className="text-sm text-muted leading-relaxed line-clamp-2 mb-4">{c.summary}</p>
-        )}
+        {/* Short description for the card. Falls back to the first paragraph of the
+            cause content when there's no summary (most causes have an empty summary
+            — the narrative lives in the timeline), so the box is never blank. */}
+        <p className="text-sm text-muted leading-relaxed line-clamp-2 mb-4">{causeExcerpt(c, 160)}</p>
 
         <div className="mt-auto">
           {/* Informational causes (goal=0) skip the raised/goal bar entirely
