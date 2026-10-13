@@ -22,3 +22,6 @@ tsconfig.tsbuildinfo
 # One-shot maintenance script backups (kept locally only)
 scripts/.dedupe-backup-*.json
 scripts/.backfill-backup-*.json
+
+# Generated report exports
+exports/

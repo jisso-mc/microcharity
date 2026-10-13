@@ -6,6 +6,10 @@ export const metadata = { title: "Legal & Financial Information" };
 
 // File names in public/financials are not consistent across years, so we map year → file explicitly.
 const reports: { year: string; file: string }[] = [
+  { year: "2025-2026", file: "/financials/MicroCharityTrust-AuditedFinancials-FY2025-26.pdf" },
+  { year: "2024-2025", file: "/financials/MicroCharityTrust-AuditedFinancials-FY2024-25.pdf" },
+  { year: "2023-2024", file: "/financials/MicroCharityTrust-AuditedFinancials-FY2023-24.pdf" },
+  { year: "2022-2023", file: "/financials/MicroCharityTrust-AuditedFinancials-FY2022-23.pdf" },
   { year: "2021-2022", file: "/financials/MicroCharityTrust-AuditedFinancials-FY2021-22.pdf" },
   { year: "2020-2021", file: "/financials/MicroCharityTrust-AuditedFinancials-FY2020-21.pdf" },
   { year: "2019-2020", file: "/financials/MicroCharityTrust-AuditedFinancials-FY2019-20.pdf" },
