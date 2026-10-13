@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { inrShort } from "@/lib/format";
 import PendingActions from "./PendingActions";
 import ResendReceiptButton from "./ResendReceiptButton";
+import DownloadReceiptButton from "./DownloadReceiptButton";
 import ExportPanel from "./ExportPanel";
 
 export const metadata = { title: "Donations — Admin" };
@@ -223,6 +224,7 @@ export default async function DonationsAdminPage({ searchParams }: { searchParam
                             can spot pending receipts at a glance. Once sent,
                             it reverts to a muted "Resend receipt". */}
                         <ResendReceiptButton donationId={d.id} receiptSent={!!d.receipt?.sentAt} />
+                        <DownloadReceiptButton donationId={d.id} />
                       </div>
                     ) : d.paymentReference ? (
                       <span className="text-xs text-muted block text-right" title={d.paymentReference}>ref · {d.paymentReference}</span>

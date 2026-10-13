@@ -321,17 +321,19 @@ export async function buildReceiptPdf(input: ReceiptPdfInput): Promise<Uint8Arra
   }
   cursorY = wy - 30;
 
-  // ---------- 80G disclosure ----------
+  // ---------- Tax deduction eligibility ----------
 
-  drawText(ctx, "80G Income Tax Exemption", M_LEFT, cursorY, 11);
+  drawText(ctx, "Tax Deduction Eligibility:", M_LEFT, cursorY, 11);
   cursorY -= 16;
   const disclosure =
-    `Donations to MicroCharity from 15-July-2014 qualify for deduction u/s 80G(5) of the ` +
-    `Income Tax Act, 1961 as per 80G Exemption Vide Order No: ${TRUST.exemption80G}`;
+    `All monetary donations made to MicroCharity qualify for tax deduction under Section 133 ` +
+    `of the Income-tax Act, 2025 (corresponding to Section 80G(5) of the Income-tax Act, 1961).`;
   for (const line of wrap(disclosure, 110)) {
     drawText(ctx, line, M_LEFT, cursorY, 9, { color: BODY });
     cursorY -= 12;
   }
+  drawText(ctx, `Unique Registration Number (URN): ${TRUST.urn}`, M_LEFT, cursorY, 9, { color: BODY });
+  cursorY -= 12;
   cursorY -= 14;
 
   // ---------- About MicroCharity ----------

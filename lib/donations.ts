@@ -357,62 +357,15 @@ export async function resendReceiptForDonation(donationId: string): Promise<void
  */
 export async function issueReceiptForDonation(donationId: string): Promise<void> {
   try {
-    const d = await prisma.donation.findUnique({
-      where: { id: donationId },
-      include: {
-        cause: { select: { title: true, mcId: true } },
-        // Pull the donor row alongside so we can fall back to Donor.panEncrypted
-        // if this particular donation didn't capture a PAN.
-        donor: { select: { panEncrypted: true } },
-      },
-    });
+    const d = await loadDonationForReceipt(donationId);
     if (!d) return;
     if (d.status !== "APPROVED") return;
 
     const existing = await prisma.receipt.findUnique({ where: { donationId } });
     if (existing?.sentAt) return; // already sent
 
-    let receiptRow = existing;
-    if (!receiptRow) {
-      // Allocate number and create row inside a transaction; the @@unique on receiptNumber
-      // catches any concurrent collision and the retry wrapper picks up the new max.
-      receiptRow = await retryOnUniqueViolation(() => prisma.$transaction(async (tx) => {
-        const num = await nextReceiptNumber(tx, d.approvedAt ?? d.createdAt);
-        return tx.receipt.create({
-          data: {
-            receiptNumber: num,
-            donationId: d.id,
-          },
-        });
-      }));
-    }
-
-    // Payment-mode labels matched to the new Finance template.
-    const paymentMode =
-      d.type === "ONLINE"  ? "Online - Razorpay" :
-      d.type === "QR"      ? "UPI" :
-      d.type === "OFFLINE" ? "Bank Transfer - NEFT / IMPS / RTGS" :
-      "Manual entry";
-
-    const paymentDate = d.paymentDate ?? d.approvedAt ?? d.createdAt;
-
-    // PAN — decrypt either the per-donation field or the donor profile, whichever
-    // is set. Stored ciphertext is "v1:..." (AES-256-GCM via lib/crypto.ts).
-    const panCiphertext = d.panEncrypted ?? d.donor?.panEncrypted ?? null;
-    const donorPan = decryptPiiSafe(panCiphertext) || null;
-
-    const pdf = await buildReceiptPdf({
-      receiptNumber: receiptRow.receiptNumber,
-      receiptDate: new Date(),
-      donorName: d.donorNameSnapshot,
-      donorPan,
-      donorAddress: d.addressSnapshot,
-      causeTitle: d.cause.title,
-      causeMcId: d.cause.mcId ?? null,
-      amount: d.amount,
-      paymentMode,
-      paymentDate,
-    });
+    const receiptRow = existing ?? await allocateReceipt(d);
+    const { pdf, paymentMode } = await renderReceiptPdf(d, receiptRow.receiptNumber, new Date());
 
     // For Razorpay donations the donor never got an ack at submission time (unlike
     // UPI / Offline where it goes out from the API route). Send it here, just
@@ -456,6 +409,84 @@ export async function issueReceiptForDonation(donationId: string): Promise<void>
     console.error("[issueReceiptForDonation] failed for", donationId);
     console.error(err instanceof Error ? err.stack ?? err.message : err);
   }
+}
+
+// ---------- Receipt PDF helpers (shared by the email send and the admin download) ----------
+
+function loadDonationForReceipt(donationId: string) {
+  return prisma.donation.findUnique({
+    where: { id: donationId },
+    include: {
+      cause: { select: { title: true, mcId: true } },
+      // Pull the donor row alongside so we can fall back to Donor.panEncrypted
+      // if this particular donation didn't capture a PAN.
+      donor: { select: { panEncrypted: true } },
+    },
+  });
+}
+
+type ReceiptDonation = NonNullable<Awaited<ReturnType<typeof loadDonationForReceipt>>>;
+
+// Allocate number and create row inside a transaction; the @@unique on receiptNumber
+// catches any concurrent collision and the retry wrapper picks up the new max.
+function allocateReceipt(d: ReceiptDonation) {
+  return retryOnUniqueViolation(() => prisma.$transaction(async (tx) => {
+    const num = await nextReceiptNumber(tx, d.approvedAt ?? d.createdAt);
+    return tx.receipt.create({
+      data: {
+        receiptNumber: num,
+        donationId: d.id,
+      },
+    });
+  }));
+}
+
+async function renderReceiptPdf(d: ReceiptDonation, receiptNumber: string, receiptDate: Date) {
+  // Payment-mode labels matched to the new Finance template.
+  const paymentMode =
+    d.type === "ONLINE"  ? "Online - Razorpay" :
+    d.type === "QR"      ? "UPI" :
+    d.type === "OFFLINE" ? "Bank Transfer - NEFT / IMPS / RTGS" :
+    "Manual entry";
+
+  const paymentDate = d.paymentDate ?? d.approvedAt ?? d.createdAt;
+
+  // PAN — decrypt either the per-donation field or the donor profile, whichever
+  // is set. Stored ciphertext is "v1:..." (AES-256-GCM via lib/crypto.ts).
+  const panCiphertext = d.panEncrypted ?? d.donor?.panEncrypted ?? null;
+  const donorPan = decryptPiiSafe(panCiphertext) || null;
+
+  const pdf = await buildReceiptPdf({
+    receiptNumber,
+    receiptDate,
+    donorName: d.donorNameSnapshot,
+    donorPan,
+    donorAddress: d.addressSnapshot,
+    causeTitle: d.cause.title,
+    causeMcId: d.cause.mcId ?? null,
+    amount: d.amount,
+    paymentMode,
+    paymentDate,
+  });
+  return { pdf, paymentMode };
+}
+
+/**
+ * Build the 80G receipt PDF for an APPROVED donation without emailing it — backs the
+ * admin "Download receipt" button. Reuses the existing receipt number (allocating one
+ * if the receipt was never sent) and dates it by when it was originally emailed, so
+ * the download matches what the donor received. Returns null if the donation doesn't
+ * exist or isn't approved.
+ */
+export async function getReceiptPdfForDonation(
+  donationId: string,
+): Promise<{ pdf: Uint8Array; receiptNumber: string } | null> {
+  const d = await loadDonationForReceipt(donationId);
+  if (!d || d.status !== "APPROVED") return null;
+  const receiptRow =
+    (await prisma.receipt.findUnique({ where: { donationId } })) ?? (await allocateReceipt(d));
+  const { pdf } = await renderReceiptPdf(d, receiptRow.receiptNumber, receiptRow.sentAt ?? receiptRow.createdAt);
+  return { pdf, receiptNumber: receiptRow.receiptNumber };
 }
 
 export async function rejectDonation(donationId: string, approverId: string, reason?: string) {

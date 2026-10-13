@@ -1,10 +1,16 @@
+import { redirect } from "next/navigation";
+import { getCurrentUser } from "@/lib/session";
 import LoginForm from "./LoginForm";
 
 export const metadata = { title: "Admin login" };
 
 // The login page must NOT use the admin layout's chrome (header/nav). It opts out via its own
 // minimal layout sibling — see app/admin/login/layout.tsx.
-export default function LoginPage() {
+export default async function LoginPage() {
+  // Already signed in (back button, bookmark, stale tab) — go straight to the dashboard
+  // instead of showing the sign-in form under the admin nav.
+  if (await getCurrentUser()) redirect("/admin");
+
   return (
     <div className="min-h-screen flex items-center justify-center bg-[var(--color-soft)] px-4">
       <div className="w-full max-w-sm">

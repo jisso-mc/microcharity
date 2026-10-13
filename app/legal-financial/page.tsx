@@ -44,8 +44,8 @@ export default function LegalFinancialPage() {
             <li><strong>PAN:</strong> {TRUST.pan}</li>
             <li><strong>CSR registration:</strong> {TRUST.csrNumber}</li>
             <li>
-              <strong>Tax exemption:</strong> Donations are eligible for exemption under Section 80G of the Income Tax Act.<br />
-              <span className="text-sm text-muted">80G Order No: <span className="font-mono text-ink">{TRUST.exemption80G}</span></span>
+              <strong>Tax Deduction Eligibility:</strong> All monetary donations made to MicroCharity qualify for tax deduction under Section 133 of the Income-tax Act, 2025 (corresponding to Section 80G(5) of the Income-tax Act, 1961).<br />
+              <span className="text-sm text-muted">Unique Registration Number (URN): <span className="font-mono text-ink">{TRUST.urn}</span> ({TRUST.urnValidity})</span>
             </li>
           </ul>
 

@@ -8,6 +8,10 @@ export const TRUST = {
   pan: "AADTM8753H",
   exemption80G:
     "DIT(E)BLR/80G/K-70/AATFM6359B/ITO(E)-2/Vol 2014-2015",
+  // Unique Registration Number for tax-deductible donations (Section 133 of the
+  // Income-tax Act, 2025 / Section 80G(5) of the 1961 Act). Printed on receipts.
+  urn: "AADTM8753H26BL01",
+  urnValidity: "2026-27 to 2035-36",
   csrNumber: "CSR00006450",
   trustRegistration: "KEN-4-00113-2010-11",
   registrationSince: "15-July-2014",

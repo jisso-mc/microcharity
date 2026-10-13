@@ -1,10 +1,9 @@
 "use client";
 
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { useState } from "react";
 
 export default function LoginForm() {
-  const router = useRouter();
   const params = useSearchParams();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -33,11 +32,14 @@ export default function LoginForm() {
       const next = fromRaw && fromRaw.startsWith("/") && !fromRaw.startsWith("//") && !fromRaw.startsWith("/\\")
         ? fromRaw
         : "/admin";
-      router.push(next);
-      router.refresh();
-      // Deliberately leave `busy` = true on the success path. router.push()
-      // returns synchronously but the actual navigation takes a few hundred
-      // ms — flipping busy back to false here would re-enable the button
+      // Hard navigation, not router.push() + router.refresh(): the refresh raced
+      // the push and re-rendered /admin/login with the new session cookie, so
+      // the admin nav appeared but the sign-in form stayed on screen. A full
+      // load guarantees the destination renders fresh with the session.
+      window.location.replace(next);
+      // Deliberately leave `busy` = true on the success path. The navigation
+      // takes a few hundred ms — flipping busy back to false here would
+      // re-enable the button
       // while the user is still on the login page, and impatient retries
       // were firing duplicate login requests against the still-mounted form.
       // The form unmounts when navigation completes, taking the busy state
