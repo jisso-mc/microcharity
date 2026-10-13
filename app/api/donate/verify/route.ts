@@ -6,6 +6,7 @@ import { razorpayKeySecret } from "@/lib/razorpay";
 import { approveDonation, issueReceiptForDonation } from "@/lib/donations";
 import { sendNewDonationAlert } from "@/lib/email";
 import { DONATION_NOTIFY_RECIPIENTS } from "@/lib/trust";
+import { revalidateSiteTotals } from "@/lib/data/stats";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -73,7 +74,7 @@ export async function POST(req: Request) {
     // Bust ISR caches so the cause page reflects the new "raised" total on the donor's
     // very next request (instead of waiting for the 60s revalidate window or the webhook
     // hop, which may not be configured in test mode).
-    revalidatePath("/");
+    revalidateSiteTotals();
     revalidatePath("/current-causes");
     revalidatePath(`/donations/${donation.cause.slug}`);
 

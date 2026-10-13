@@ -6,6 +6,7 @@ import { razorpayWebhookSecret } from "@/lib/razorpay";
 import { approveDonation, failDonationByOrderId, issueReceiptForDonation } from "@/lib/donations";
 import { sendNewDonationAlert } from "@/lib/email";
 import { DONATION_NOTIFY_RECIPIENTS } from "@/lib/trust";
+import { revalidateSiteTotals } from "@/lib/data/stats";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -79,7 +80,7 @@ export async function POST(req: Request) {
           razorpaySignature: signature,
         });
         // Refresh public surfaces so the new "raised" total shows on the cause page promptly.
-        revalidatePath("/");
+        revalidateSiteTotals();
         revalidatePath("/current-causes");
         revalidatePath(`/donations/${donation.cause.slug}`);
       }

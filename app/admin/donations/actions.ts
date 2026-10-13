@@ -8,6 +8,7 @@ import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/session";
 import { createManualDonation, approveDonation, rejectDonation, issueReceiptForDonation, resendReceiptForDonation } from "@/lib/donations";
 import { audit } from "@/lib/audit";
+import { revalidateSiteTotals } from "@/lib/data/stats";
 
 async function requireAdmin() {
   const user = await getCurrentUser();
@@ -113,7 +114,7 @@ export async function approveDonationAction(formData: FormData) {
   });
   revalidatePath("/admin/donations");
   // Bust the ISR cache on every public surface that shows this cause's raised total.
-  revalidatePath("/");
+  revalidateSiteTotals();
   revalidatePath("/current-causes");
   if (before?.cause.slug) revalidatePath(`/donations/${before.cause.slug}`);
 

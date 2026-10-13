@@ -1,6 +1,6 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
+import { revalidateSiteTotals } from "@/lib/data/stats";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/session";
 import { audit } from "@/lib/audit";
@@ -57,8 +57,7 @@ export async function saveSiteStatsAction(_prev: SiteStatsFormState, formData: F
   });
 
   // Bust the home page's ISR cache so the new figures show on the very next visit.
-  revalidatePath("/");
-  revalidatePath("/who-we-are");
+  revalidateSiteTotals();
 
   return { ok: true, donationCount, raisedAmount };
 }

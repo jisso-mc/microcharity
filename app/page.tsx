@@ -285,7 +285,7 @@ function BannerEditorial({ totals }: { totals: SiteTotals }) {
               </div>
               <div>
                 <p className="font-display text-2xl text-ink">{totals.raisedShortLabel}</p>
-                <p className="text-xs text-muted mt-0.5">Raised</p>
+                <p className="text-xs text-muted mt-0.5">Raised &amp; disbursed</p>
               </div>
             </div>
           </div>

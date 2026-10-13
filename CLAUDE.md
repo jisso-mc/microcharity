@@ -211,10 +211,19 @@ unsubscribe link is intentionally NOT routed through the click-tracker
 
 ### Site totals on the home page
 
-The hero stats on `/` (and the Success Stories subtitle) read from the
-`SiteStat` singleton (`lib/data/stats.ts`), **not** from live
-`Donation` sums. Admins edit those numbers from the `/admin` dashboard;
-legacy WordPress-era donations are baked into the manual figure.
+The hero stats on `/` (plus Who We Are, the Success Stories subtitle and
+the admin dashboard's Total donations / Total raised cards) come from
+`getSiteTotals()` in `lib/data/stats.ts` = **legacy + live**:
+
+- **Legacy** — the `SiteStat` singleton, edited by admins on `/admin`.
+  Frozen totals up to the end of FY 2025-26 (31-Mar-2026), WordPress-era
+  donations included.
+- **Live** — APPROVED `Donation` rows with `createdAt >= 01-Apr-2026 IST`
+  (`LIVE_TOTALS_FROM`). Keyed on `createdAt`, not `approvedAt`: imported
+  2019-24 donations were approved in May 2026 and must not count twice.
+
+Call `revalidateSiteTotals()` after any approval so the public pages
+update immediately (they're otherwise ISR, 60s).
 
 ### Soft delete vs hard delete
 
