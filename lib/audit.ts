@@ -15,6 +15,7 @@ export type AuditAction =
   | "donation.create.manual"
   | "donation.export"
   | "donation.receipt.download"
+  | "donation.edit"
   // Causes
   | "cause.create"
   | "cause.update"

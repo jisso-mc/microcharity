@@ -22,6 +22,7 @@ type Search = {
   type?: string;
   q?: string;
   created?: string;
+  edited?: string;
 };
 
 const STATUS_BADGE: Record<DonationStatus, string> = {
@@ -128,6 +129,12 @@ export default async function DonationsAdminPage({ searchParams }: { searchParam
         </div>
       )}
 
+      {sp.edited && (
+        <div className="rounded-lg bg-green-50 border border-green-200 px-4 py-3 text-sm text-green-800">
+          Donation updated. If its receipt was already emailed, use <strong>Resend receipt</strong> to send the corrected one.
+        </div>
+      )}
+
       {/* Filters */}
       <div className="flex flex-wrap items-center gap-2">
         <div className="flex flex-wrap gap-2">
@@ -210,6 +217,9 @@ export default async function DonationsAdminPage({ searchParams }: { searchParam
                     <span className="block">{d.createdAt.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: true })}</span>
                   </td>
                   <td className="px-4 py-3">
+                    <div className="flex justify-end mb-1.5">
+                      <Link href={`/admin/donations/${d.id}/edit`} className="text-xs font-semibold text-muted hover:text-ink">Edit</Link>
+                    </div>
                     {d.status === "PENDING" ? (
                       <PendingActions id={d.id} amount={d.amount} />
                     ) : d.status === "APPROVED" ? (

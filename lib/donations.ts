@@ -312,6 +312,110 @@ export async function approveDonation(donationId: string, approverId: string | n
   });
 }
 
+export type EditDonationInput = {
+  donorId: string;
+  causeId: string;
+  type: DonationType;
+  amount: number;
+  date: Date | null;   // new record date; null = unchanged
+};
+
+/**
+ * Admin edit of a donation's donor / cause / type / amount / date, in any status.
+ *
+ * For APPROVED donations the running totals that approveDonation() bumped are moved
+ * with it: the old cause + donor are reversed by the old amount and the new cause +
+ * donor are credited with the new amount (cause.donorCount follows the same
+ * "first approved gift from this donor to this cause" rule). Other statuses never
+ * touched the totals, so only the row changes. No auto-close on edit — closing a
+ * cause stays an explicit admin action.
+ *
+ * Changing the donor re-snapshots name / email / address / PAN from the new donor's
+ * profile, so the receipt and the 10BD export follow the new donor. An existing
+ * receipt keeps its number; the PDF is rebuilt from the edited data on the next
+ * download or resend.
+ */
+export async function editDonation(donationId: string, input: EditDonationInput) {
+  return prisma.$transaction(async (tx) => {
+    const d = await tx.donation.findUnique({ where: { id: donationId } });
+    if (!d) throw new Error("Donation not found");
+
+    const donorChanged = input.donorId !== d.donorId;
+    const newDonor = await tx.donor.findFirst({
+      where: { id: input.donorId, ...(donorChanged ? { deletedAt: null } : {}) },
+    });
+    if (!newDonor) throw new Error("Donor not found");
+    const cause = await tx.cause.findUnique({ where: { id: input.causeId }, select: { id: true } });
+    if (!cause) throw new Error("Cause not found");
+
+    if (d.status === "APPROVED") {
+      // ---- Reverse the old credit ----
+      const oldDonorHasOther = d.donorId
+        ? (await tx.donation.count({
+            where: { donorId: d.donorId, causeId: d.causeId, status: "APPROVED", id: { not: d.id } },
+          })) > 0
+        : false;
+      await tx.cause.update({
+        where: { id: d.causeId },
+        data: {
+          raisedAmount: { decrement: d.amount },
+          ...(oldDonorHasOther ? {} : { donorCount: { decrement: 1 } }),
+        },
+      });
+      if (d.donorId) {
+        await tx.donor.update({
+          where: { id: d.donorId },
+          data: { totalDonated: { decrement: d.amount }, donationCount: { decrement: 1 } },
+        });
+      }
+
+      // ---- Apply the new credit ----
+      const newDonorHasOther =
+        (await tx.donation.count({
+          where: { donorId: newDonor.id, causeId: input.causeId, status: "APPROVED", id: { not: d.id } },
+        })) > 0;
+      await tx.cause.update({
+        where: { id: input.causeId },
+        data: {
+          raisedAmount: { increment: input.amount },
+          ...(newDonorHasOther ? {} : { donorCount: { increment: 1 } }),
+        },
+      });
+      const giftDate = input.date ?? d.createdAt;
+      await tx.donor.update({
+        where: { id: newDonor.id },
+        data: {
+          totalDonated: { increment: input.amount },
+          donationCount: { increment: 1 },
+          ...(!newDonor.firstDonationAt || giftDate < newDonor.firstDonationAt ? { firstDonationAt: giftDate } : {}),
+          ...(!newDonor.lastDonationAt || giftDate > newDonor.lastDonationAt ? { lastDonationAt: giftDate } : {}),
+        },
+      });
+    }
+
+    return tx.donation.update({
+      where: { id: donationId },
+      data: {
+        causeId: input.causeId,
+        type: input.type,
+        amount: input.amount,
+        ...(donorChanged
+          ? {
+              donorId: newDonor.id,
+              donorNameSnapshot: newDonor.name,
+              donorEmailSnapshot: newDonor.email,
+              addressSnapshot: newDonor.address,
+              panEncrypted: newDonor.panEncrypted,
+            }
+          : {}),
+        // The date is both the record date (lists, reports, FY totals) and the
+        // "Donation Date" printed on the receipt (paymentDate wins there).
+        ...(input.date ? { createdAt: input.date, paymentDate: input.date } : {}),
+      },
+    });
+  });
+}
+
 /** Mark a PENDING online donation as FAILED (no totals adjusted). */
 export async function failDonationByOrderId(orderId: string, reason?: string) {
   const d = await prisma.donation.findUnique({ where: { razorpayOrderId: orderId } });

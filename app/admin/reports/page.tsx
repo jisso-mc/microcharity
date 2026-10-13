@@ -135,7 +135,21 @@ export default async function ReportsAdminPage({
             <h2 className="font-display text-xl text-ink">Donor report</h2>
             <p className="text-xs text-muted mt-0.5">Top 50 by approved amount. Full list in the CSV.</p>
           </div>
-          <ExportLinks href={exportHref("donors")} />
+          <div className="flex flex-col items-end gap-1.5">
+            <ExportLinks href={exportHref("donors")} />
+            {/* IT Form 10BD statement — per financial year only. */}
+            {fy && fy !== "custom" && fy !== "all" ? (
+              <a
+                href={`/api/admin/reports/donor-statement?fy=${encodeURIComponent(fy)}`}
+                className="rounded-full border border-[var(--color-line)] text-ink text-xs font-semibold px-3 py-1.5 hover:border-ink transition whitespace-nowrap"
+                title={`MC-DonationDetails-FY${fy}.xlsx — one row per donor with PAN, address and total donated in FY ${fy}`}
+              >
+                ⬇ IT 10B file (Excel)
+              </a>
+            ) : (
+              <span className="text-xs text-muted">Select a financial year for the IT 10B file</span>
+            )}
+          </div>
         </div>
         {donors.length === 0 ? <Empty /> : (
           <div className="overflow-x-auto">

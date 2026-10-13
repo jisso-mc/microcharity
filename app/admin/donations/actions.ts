@@ -6,7 +6,7 @@ import { redirect } from "next/navigation";
 import type { DonationType } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/session";
-import { createManualDonation, approveDonation, rejectDonation, issueReceiptForDonation, resendReceiptForDonation } from "@/lib/donations";
+import { createManualDonation, approveDonation, rejectDonation, issueReceiptForDonation, resendReceiptForDonation, editDonation } from "@/lib/donations";
 import { audit } from "@/lib/audit";
 import { revalidateSiteTotals } from "@/lib/data/stats";
 
@@ -182,6 +182,82 @@ export async function rejectDonationAction(formData: FormData) {
     payload: { reason: reason ?? null },
   });
   revalidatePath("/admin/donations");
+}
+
+const EDIT_TYPES: DonationType[] = ["ONLINE", "QR", "OFFLINE", "MANUAL"];
+const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** "YYYY-MM-DD" of a timestamp in IST — what the edit form's date input shows. */
+function istDateString(d: Date): string {
+  return new Date(d.getTime() + IST_OFFSET_MS).toISOString().slice(0, 10);
+}
+
+export async function editDonationAction(_prev: FormState, formData: FormData): Promise<FormState> {
+  const me = await requireAdmin();
+
+  const id      = String(formData.get("id") ?? "").trim();
+  const donorId = String(formData.get("donorId") ?? "").trim();
+  const causeId = String(formData.get("causeId") ?? "").trim();
+  const typeRaw = String(formData.get("type") ?? "").trim();
+  const amount  = Number(String(formData.get("amount") ?? "").trim());
+  const dateRaw = String(formData.get("date") ?? "").trim();
+
+  if (!donorId) return { error: "Pick a donor." };
+  if (!causeId) return { error: "Pick a cause." };
+  if (!EDIT_TYPES.includes(typeRaw as DonationType)) return { error: "Invalid donation type." };
+  if (!Number.isInteger(amount) || amount < 1) return { error: "Amount must be a whole number of at least ₹1." };
+  if (amount > APPROVE_MAX_AMOUNT) return { error: "Amount is implausibly large — please check." };
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateRaw)) return { error: "Pick a valid date." };
+
+  const before = await prisma.donation.findUnique({
+    where: { id },
+    select: {
+      donorId: true, donorEmailSnapshot: true, causeId: true, type: true, amount: true, createdAt: true, status: true,
+      cause: { select: { slug: true } },
+    },
+  });
+  if (!before) return { error: "Donation not found." };
+
+  // Only move the timestamp when the calendar date actually changed, and keep the
+  // original IST time-of-day so the list order within a day stays sensible.
+  let date: Date | null = null;
+  if (dateRaw !== istDateString(before.createdAt)) {
+    const timeOfDay = (before.createdAt.getTime() + IST_OFFSET_MS) % DAY_MS;
+    date = new Date(Date.parse(`${dateRaw}T00:00:00.000Z`) - IST_OFFSET_MS + timeOfDay);
+    if (Number.isNaN(date.getTime())) return { error: "Pick a valid date." };
+    if (date.getTime() > Date.now() + DAY_MS) return { error: "Date can't be in the future." };
+  }
+
+  let after;
+  try {
+    after = await editDonation(id, { donorId, causeId, type: typeRaw as DonationType, amount, date });
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "Could not save the donation." };
+  }
+
+  await audit({
+    action: "donation.edit",
+    userId: me.userId,
+    entityType: "Donation",
+    entityId: id,
+    payload: {
+      status: before.status,
+      before: { donorId: before.donorId, donorEmail: before.donorEmailSnapshot, causeId: before.causeId, type: before.type, amount: before.amount, createdAt: before.createdAt },
+      after:  { donorId: after.donorId, donorEmail: after.donorEmailSnapshot, causeId: after.causeId, type: after.type, amount: after.amount, createdAt: after.createdAt },
+    },
+  });
+
+  revalidatePath("/admin/donations");
+  if (before.status === "APPROVED") {
+    revalidateSiteTotals();
+    revalidatePath("/current-causes");
+    revalidatePath("/success-stories");
+    const newCause = await prisma.cause.findUnique({ where: { id: causeId }, select: { slug: true } });
+    revalidatePath(`/donations/${before.cause.slug}`);
+    if (newCause) revalidatePath(`/donations/${newCause.slug}`);
+  }
+  redirect(`/admin/donations?edited=${id}`);
 }
 
 function toStr(v: FormDataEntryValue | null): string | undefined {

@@ -4,6 +4,7 @@
 // half-open interval [from, toExclusive).
 
 import { prisma } from "./prisma";
+import { decryptPiiSafe } from "./crypto";
 
 export type Range = { from: Date; toExclusive: Date };
 
@@ -180,6 +181,59 @@ export async function topDonors(r: Range, limit = 100): Promise<DonorRow[]> {
     }))
     .sort((a, b) => b.amount - a.amount)
     .slice(0, limit);
+}
+
+// ---------- IT Form 10BD donor statement ----------
+
+export type DonorStatementRow = { pan: string; name: string; address: string; email: string; amount: number };
+
+/**
+ * One row per donor with the cumulative APPROVED amount in the range — the data the
+ * trust files with the Income Tax dept (Form 10BD). Grouped by email (same identity
+ * as topDonors). PAN / name / address come from the donor's most recent donation in
+ * the range that carries them, falling back to the Donor profile. PAN is decrypted
+ * here, so callers must be admin-only and never cache the output.
+ */
+export async function donorStatement(r: Range): Promise<DonorStatementRow[]> {
+  const donations = await prisma.donation.findMany({
+    where: { ...whereRange(r), status: "APPROVED" },
+    orderBy: { createdAt: "desc" }, // newest first → first non-empty value wins
+    select: {
+      amount: true, donorNameSnapshot: true, donorEmailSnapshot: true,
+      addressSnapshot: true, panEncrypted: true,
+      donor: { select: { name: true, address: true, panEncrypted: true } },
+    },
+  });
+
+  type Acc = DonorStatementRow & { profilePan: string | null; profileAddress: string; profileName: string };
+  const byEmail = new Map<string, Acc>();
+  for (const d of donations) {
+    const key = d.donorEmailSnapshot.trim().toLowerCase();
+    let row = byEmail.get(key);
+    if (!row) {
+      row = {
+        pan: "", name: "", address: "", email: d.donorEmailSnapshot.trim(), amount: 0,
+        profilePan: d.donor?.panEncrypted ?? null,
+        profileAddress: d.donor?.address?.trim() ?? "",
+        profileName: d.donor?.name?.trim() ?? "",
+      };
+      byEmail.set(key, row);
+    }
+    row.amount += d.amount;
+    if (!row.name && d.donorNameSnapshot.trim()) row.name = d.donorNameSnapshot.trim();
+    if (!row.address && d.addressSnapshot?.trim()) row.address = d.addressSnapshot.trim();
+    if (!row.pan && d.panEncrypted) row.pan = decryptPiiSafe(d.panEncrypted) || "";
+  }
+
+  return [...byEmail.values()]
+    .map((r) => ({
+      pan: (r.pan || decryptPiiSafe(r.profilePan) || "").toUpperCase(),
+      name: r.name || r.profileName || r.email.split("@")[0],
+      address: r.address || r.profileAddress,
+      email: r.email,
+      amount: r.amount,
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name, "en", { sensitivity: "base" }));
 }
 
 export type PendingRow = {
