@@ -29,16 +29,19 @@ export default async function CauseApplicationsPage({
   return (
     <div className="min-h-screen bg-[var(--color-soft)]">
       <header className="bg-white border-b border-[var(--color-line)]">
-        <div className="container-page py-6">
+        <div className="container-page py-5 md:py-6">
           <div className="text-[11px] uppercase tracking-wider font-semibold text-accent-600">MicroCharity Trust</div>
           <h1 className="font-display text-2xl md:text-3xl text-ink mt-1">Application Form</h1>
           <p className="text-sm text-muted mt-2 max-w-2xl">
-            Please pick the application type below and complete the form. Your details will be
-            reviewed by our team and we&apos;ll be in touch via email or phone.
+            {presetType ? "Please complete the form below." : "Please pick the application type below and complete the form."}{" "}
+            Your details will be reviewed by our team and we&apos;ll be in touch via email or phone.
+          </p>
+          <p className="text-xs text-muted mt-2 max-w-2xl">
+            Keep your photo, Govt. ID and other documents handy — you can photograph them with your phone as you go.
           </p>
         </div>
       </header>
-      <main className="container-page py-8 max-w-3xl">
+      <main className="container-page py-4 md:py-8 max-w-3xl">
         <ApplicationForm presetType={presetType} />
       </main>
     </div>

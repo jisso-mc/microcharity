@@ -37,8 +37,16 @@ const FORM_LABELS: Record<FormType, string> = {
   ORGANIZATIONAL: "Organizational",
 };
 
+// Mobile-first: 16px text on phones (iOS zooms the page on focus below 16px), 48px
+// tall tap targets, left-aligned iOS date values, and scroll-margin so the browser's
+// "fill in this field" jump doesn't hide the field under the sticky site header.
 const inputCls =
-  "w-full rounded-lg border border-[var(--color-line)] focus:border-accent-600 focus:ring-2 focus:ring-accent-100 outline-none px-3 py-2 text-sm bg-white";
+  "w-full min-h-12 sm:min-h-0 rounded-lg border border-[var(--color-line)] focus:border-accent-600 focus:ring-2 focus:ring-accent-100 outline-none px-3 py-3 sm:py-2 text-base sm:text-sm bg-white scroll-mt-28 [&::-webkit-date-and-time-value]:text-left";
+
+// Draft autosave (new applications only). Phones often reload the tab when the
+// camera / file picker opens or the applicant switches apps — never lose their work.
+const DRAFT_KEY = "mc-application-draft-v1";
+type Draft = { formType: FormType; data: Record<string, unknown>; files: Record<string, FileState>; savedAt: number };
 
 function todayISO() {
   const d = new Date();
@@ -143,6 +151,60 @@ export default function ApplicationForm({ edit, presetType }: { edit?: EditModeP
   // reset it.
   const mountedAtRef = useRef<number>(0);
   useEffect(() => { mountedAtRef.current = Date.now(); }, []);
+
+  // Restore a saved draft (new applications only; a type-specific link only restores
+  // a draft of the same type).
+  const [restored, setRestored] = useState(false);
+  const draftReady = useRef(false);
+  useEffect(() => {
+    if (edit) return;
+    try {
+      const raw = localStorage.getItem(DRAFT_KEY);
+      const d = raw ? (JSON.parse(raw) as Draft) : null;
+      const fresh = d && Date.now() - d.savedAt < 30 * 24 * 3600 * 1000;
+      if (d && fresh && d.formType && (!presetType || presetType === d.formType)) {
+        setFormType(d.formType);
+        setData({ ...emptyData(d.formType), ...d.data });
+        setFiles(Object.fromEntries(Object.entries(d.files ?? {}).filter(([, f]) => f.status === "done" && f.url)));
+        setRestored(true);
+      }
+    } catch { /* storage unavailable — carry on without a draft */ }
+    draftReady.current = true;
+  }, [edit, presetType]);
+
+  // Save the draft shortly after each change.
+  useEffect(() => {
+    if (edit || !draftReady.current || !formType || done) return;
+    const t = setTimeout(() => {
+      try {
+        const doneFiles = Object.fromEntries(Object.entries(files).filter(([, f]) => f.status === "done"));
+        localStorage.setItem(DRAFT_KEY, JSON.stringify({ formType, data, files: doneFiles, savedAt: Date.now() } satisfies Draft));
+      } catch { /* quota / private mode — ignore */ }
+    }, 600);
+    return () => clearTimeout(t);
+  }, [edit, formType, data, files, done]);
+
+  function clearDraft() {
+    try { localStorage.removeItem(DRAFT_KEY); } catch { /* ignore */ }
+  }
+
+  function startOver() {
+    clearDraft();
+    setRestored(false);
+    const t = presetType ?? "";
+    setFormType(t);
+    setData(t ? emptyData(t) : {});
+    setFiles({});
+    setError(null);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  // Bring a submit error into view — on a phone the button is far below the fold of
+  // whatever the applicant was looking at.
+  const errorRef = useRef<HTMLParagraphElement>(null);
+  useEffect(() => {
+    if (error) errorRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [error]);
 
   function handleTypeChange(next: FormType | "") {
     setFormType(next);
@@ -250,6 +312,7 @@ export default function ApplicationForm({ edit, presetType }: { edit?: EditModeP
           });
       const j = await res.json();
       if (!res.ok) throw new Error(j.error ?? "Could not submit.");
+      if (!edit) clearDraft();
       setDone({ applicationNo: j.applicationNo });
       // Scroll to top so the confirmation is visible.
       window.scrollTo({ top: 0, behavior: "smooth" });
@@ -262,7 +325,7 @@ export default function ApplicationForm({ edit, presetType }: { edit?: EditModeP
 
   if (done && edit) {
     return (
-      <div className="rounded-2xl bg-white border border-[var(--color-line)] p-6 md:p-8">
+      <div className="rounded-2xl bg-white border border-[var(--color-line)] p-5 md:p-8">
         <div className="rounded-lg bg-green-50 border border-green-200 p-4 mb-4">
           <p className="font-display text-base text-green-800">Your changes have been saved — thank you.</p>
         </div>
@@ -275,7 +338,7 @@ export default function ApplicationForm({ edit, presetType }: { edit?: EditModeP
         <button
           type="button"
           onClick={() => window.location.reload()}
-          className="mt-6 inline-flex items-center gap-2 rounded-full border border-[var(--color-line)] hover:border-ink text-ink font-semibold px-5 py-2 text-sm transition"
+          className="mt-6 w-full sm:w-auto inline-flex items-center justify-center gap-2 rounded-full border border-[var(--color-line)] hover:border-ink text-ink font-semibold px-5 py-3 sm:py-2 text-sm transition"
         >
           Back to my application
         </button>
@@ -285,7 +348,7 @@ export default function ApplicationForm({ edit, presetType }: { edit?: EditModeP
 
   if (done) {
     return (
-      <div className="rounded-2xl bg-white border border-[var(--color-line)] p-6 md:p-8">
+      <div className="rounded-2xl bg-white border border-[var(--color-line)] p-5 md:p-8">
         <div className="rounded-lg bg-green-50 border border-green-200 p-4 mb-4">
           <p className="font-display text-base text-green-800">Application received — thank you.</p>
         </div>
@@ -298,7 +361,7 @@ export default function ApplicationForm({ edit, presetType }: { edit?: EditModeP
         <button
           type="button"
           onClick={() => window.location.reload()}
-          className="mt-6 inline-flex items-center gap-2 rounded-full border border-[var(--color-line)] hover:border-ink text-ink font-semibold px-5 py-2 text-sm transition"
+          className="mt-6 w-full sm:w-auto inline-flex items-center justify-center gap-2 rounded-full border border-[var(--color-line)] hover:border-ink text-ink font-semibold px-5 py-3 sm:py-2 text-sm transition"
         >
           Submit another application
         </button>
@@ -307,9 +370,15 @@ export default function ApplicationForm({ edit, presetType }: { edit?: EditModeP
   }
 
   return (
-    <form onSubmit={onSubmit} className="space-y-6">
+    <form onSubmit={onSubmit} className="space-y-4 sm:space-y-6">
+      {restored && (
+        <div className="rounded-xl bg-green-50 border border-green-200 px-4 py-3 text-sm text-green-800 flex flex-wrap items-center gap-x-3 gap-y-1">
+          <span>We&apos;ve restored the details you entered earlier on this device.</span>
+          <button type="button" onClick={startOver} className="font-semibold underline underline-offset-2 py-1">Start over</button>
+        </div>
+      )}
       {edit ? (
-        <section className="rounded-2xl bg-white border border-[var(--color-line)] p-6">
+        <section className="rounded-2xl bg-white border border-[var(--color-line)] p-4 sm:p-6">
           <p className="text-sm text-ink">
             <strong>{FORM_LABELS[edit.formType]}</strong> application · <span className="font-mono">{edit.applicationNo}</span>
           </p>
@@ -318,7 +387,7 @@ export default function ApplicationForm({ edit, presetType }: { edit?: EditModeP
           </p>
         </section>
       ) : (
-      <section className="rounded-2xl bg-white border border-[var(--color-line)] p-6">
+      <section className="rounded-2xl bg-white border border-[var(--color-line)] p-4 sm:p-6">
         <Label>Application type *</Label>
         <select
           value={formType}
@@ -408,17 +477,22 @@ export default function ApplicationForm({ edit, presetType }: { edit?: EditModeP
             </label>
           </div>
 
-          {error && <p className="text-sm text-accent-700 bg-accent-50 border border-accent-200 rounded-lg px-3 py-2">{error}</p>}
+          {error && <p ref={errorRef} role="alert" className="text-sm text-accent-700 bg-accent-50 border border-accent-200 rounded-lg px-3 py-2">{error}</p>}
 
           <button
             type="submit"
             disabled={busy}
             aria-busy={busy}
-            className="w-full inline-flex items-center justify-center gap-2 rounded-full bg-accent-600 hover:bg-accent-700 disabled:opacity-60 disabled:cursor-wait text-white font-semibold px-6 py-3 transition"
+            className="w-full inline-flex items-center justify-center gap-2 rounded-full bg-accent-600 hover:bg-accent-700 disabled:opacity-60 disabled:cursor-wait text-white font-semibold text-base px-6 py-4 sm:py-3 transition"
           >
             {busy && <Spinner />}
             {busy ? (edit ? "Saving…" : "Submitting…") : (edit ? "Save changes" : "Submit application")}
           </button>
+          {!edit && (
+            <p className="text-xs text-muted text-center">
+              Your answers are saved on this device as you type, so you can come back and finish later.
+            </p>
+          )}
         </>
       )}
     </form>
@@ -440,10 +514,14 @@ type SectionProps = {
   removeArrayItem: (arrayKey: string, idx: number) => void;
 };
 
+const addBtnCls =
+  "w-full sm:w-auto rounded-lg border border-dashed border-accent-600/50 sm:border-0 px-4 py-3 sm:p-0 text-sm font-semibold text-accent-600 hover:text-accent-700";
+const removeBtnCls = "text-xs font-semibold text-muted hover:text-accent-700 py-2";
+
 function Card({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <section className="rounded-2xl bg-white border border-[var(--color-line)] p-6">
-      <h2 className="font-display text-lg text-ink mb-4">{title}</h2>
+    <section className="rounded-2xl bg-white border border-[var(--color-line)] p-4 sm:p-6">
+      <h2 className="font-display text-lg text-ink mb-4 leading-snug">{title}</h2>
       <div className="space-y-4">{children}</div>
     </section>
   );
@@ -453,8 +531,15 @@ function Label({ children }: { children: React.ReactNode }) {
   return <label className="block text-sm font-semibold text-ink">{children}</label>;
 }
 
+type InputHints = Pick<React.InputHTMLAttributes<HTMLInputElement>, "inputMode" | "autoComplete" | "autoCapitalize" | "maxLength">;
+// Ready-made hints so phones show the right keyboard / autofill.
+const MONEY: InputHints = { inputMode: "decimal", autoComplete: "off" };
+const NUMBER: InputHints = { inputMode: "numeric", autoComplete: "off" };
+const EMAIL: InputHints = { autoComplete: "email", autoCapitalize: "none" };
+const OFF: InputHints = { autoComplete: "off" };
+
 function Field({
-  label, value, onChange, type = "text", required, placeholder, colSpan,
+  label, value, onChange, type = "text", required, placeholder, colSpan, hints,
 }: {
   label: string;
   value: string;
@@ -463,6 +548,7 @@ function Field({
   required?: boolean;
   placeholder?: string;
   colSpan?: boolean;
+  hints?: InputHints;
 }) {
   return (
     <div className={colSpan ? "sm:col-span-2" : ""}>
@@ -473,6 +559,8 @@ function Field({
         onChange={(e) => onChange(e.target.value)}
         required={required}
         placeholder={placeholder}
+        {...(type === "email" ? EMAIL : {})}
+        {...hints}
         className={`${inputCls} mt-1`}
       />
     </div>
@@ -517,14 +605,14 @@ function ApplicantSection({ data, setSection, label = "Applicant details" }: { d
   const a = data.applicant ?? {};
   return (
     <Card title={label}>
-      <Field label="Full name" value={a.fullName} onChange={(v) => setSection("applicant", { fullName: v })} required colSpan />
-      <Field label="Address" value={a.address} onChange={(v) => setSection("applicant", { address: v })} required colSpan />
+      <Field label="Full name" value={a.fullName} onChange={(v) => setSection("applicant", { fullName: v })} required colSpan hints={{ autoComplete: "name" }} />
+      <Field label="Address" value={a.address} onChange={(v) => setSection("applicant", { address: v })} required colSpan hints={{ autoComplete: "street-address" }} />
       <div className="grid sm:grid-cols-2 gap-4">
-        <Field label="Phone" value={a.phone} onChange={(v) => setSection("applicant", { phone: v })} type="tel" required />
-        <Field label="Mobile" value={a.mobile} onChange={(v) => setSection("applicant", { mobile: v })} type="tel" />
+        <Field label="Phone" value={a.phone} onChange={(v) => setSection("applicant", { phone: v })} type="tel" required hints={{ autoComplete: "tel" }} />
+        <Field label="Mobile" value={a.mobile} onChange={(v) => setSection("applicant", { mobile: v })} type="tel" hints={{ autoComplete: "tel" }} />
         <Field label="Email" value={a.email} onChange={(v) => setSection("applicant", { email: v })} type="email" />
-        <Field label="Date of birth" value={a.dateOfBirth} onChange={(v) => setSection("applicant", { dateOfBirth: v })} type="date" required />
-        <Field label="Age" value={a.age} onChange={(v) => setSection("applicant", { age: v })} />
+        <Field label="Date of birth" value={a.dateOfBirth} onChange={(v) => setSection("applicant", { dateOfBirth: v })} type="date" required hints={{ autoComplete: "bday" }} />
+        <Field label="Age" value={a.age} onChange={(v) => setSection("applicant", { age: v })} hints={NUMBER} />
         <Select label="Sex" value={a.sex ?? ""} onChange={(v) => setSection("applicant", { sex: v })} options={[["MALE","Male"],["FEMALE","Female"]]} />
       </div>
     </Card>
@@ -568,22 +656,22 @@ function EducationalSections(p: SectionProps) {
             </div>
             <TextArea label="Achievements" value={row.achievements} onChange={(v) => p.updateArrayItem("educationHistory", i, { achievements: v })} rows={2} />
             {ed.length > 1 && (
-              <button type="button" onClick={() => p.removeArrayItem("educationHistory", i)} className="text-xs font-semibold text-muted hover:text-accent-700">Remove this row</button>
+              <button type="button" onClick={() => p.removeArrayItem("educationHistory", i)} className={removeBtnCls}>Remove this row</button>
             )}
           </div>
         ))}
-        <button type="button" onClick={() => p.addArrayItem("educationHistory", { school: "", fromDate: "", toDate: "", achievements: "" })} className="text-sm font-semibold text-accent-600 hover:text-accent-700">+ Add row</button>
+        <button type="button" onClick={() => p.addArrayItem("educationHistory", { school: "", fromDate: "", toDate: "", achievements: "" })} className={addBtnCls}>+ Add row</button>
       </Card>
 
       <Card title="Funding requested">
         <p className="text-xs text-muted -mt-2">Indicate items and costs (₹).</p>
         <div className="grid sm:grid-cols-2 gap-4">
-          <Field label="Fees" value={p.data.fundingRequested?.fees} onChange={(v) => p.setSection("fundingRequested", { fees: v })} />
-          <Field label="Uniform" value={p.data.fundingRequested?.uniform} onChange={(v) => p.setSection("fundingRequested", { uniform: v })} />
-          <Field label="Books / stationaries" value={p.data.fundingRequested?.books} onChange={(v) => p.setSection("fundingRequested", { books: v })} />
-          <Field label="Others" value={p.data.fundingRequested?.others} onChange={(v) => p.setSection("fundingRequested", { others: v })} />
+          <Field label="Fees (₹)" value={p.data.fundingRequested?.fees} onChange={(v) => p.setSection("fundingRequested", { fees: v })} hints={MONEY} />
+          <Field label="Uniform (₹)" value={p.data.fundingRequested?.uniform} onChange={(v) => p.setSection("fundingRequested", { uniform: v })} hints={MONEY} />
+          <Field label="Books / stationaries (₹)" value={p.data.fundingRequested?.books} onChange={(v) => p.setSection("fundingRequested", { books: v })} hints={MONEY} />
+          <Field label="Others (₹)" value={p.data.fundingRequested?.others} onChange={(v) => p.setSection("fundingRequested", { others: v })} hints={MONEY} />
         </div>
-        <Field label="Total amount of financial assistance required (₹)" value={p.data.totalAmount} onChange={(v) => p.setField("totalAmount", v)} required />
+        <Field label="Total amount of financial assistance required (₹)" value={p.data.totalAmount} onChange={(v) => p.setField("totalAmount", v)} required hints={MONEY} />
       </Card>
 
       <Card title="Background">
@@ -603,11 +691,11 @@ function MedicalSections(p: SectionProps) {
       <SituationSection data={p.data} setField={p.setField} />
       <FamilySection data={p.data} updateArrayItem={p.updateArrayItem} addArrayItem={p.addArrayItem} removeArrayItem={p.removeArrayItem} />
       <Card title="Income">
-        <Field label="Annual income of family (₹)" value={p.data.annualIncome} onChange={(v) => p.setField("annualIncome", v)} required />
+        <Field label="Annual income of family (₹)" value={p.data.annualIncome} onChange={(v) => p.setField("annualIncome", v)} required hints={MONEY} />
       </Card>
       <Card title="Medical details">
         <TextArea label="Circumstances leading to the claim — please explain the medical situation in as much detail as possible" value={p.data.medicalCircumstances} onChange={(v) => p.setField("medicalCircumstances", v)} required rows={6} />
-        <Field label="Total amount of financial assistance required (₹)" value={p.data.totalAmount} onChange={(v) => p.setField("totalAmount", v)} required />
+        <Field label="Total amount of financial assistance required (₹)" value={p.data.totalAmount} onChange={(v) => p.setField("totalAmount", v)} required hints={MONEY} />
       </Card>
       <Card title="Background">
         <TextArea label="Have you previously received assistance from any other source? (If yes, state amount, when, and what for.)" value={p.data.prevAssistance} onChange={(v) => p.setField("prevAssistance", v)} rows={3} />
@@ -636,11 +724,11 @@ function IndividualSections(p: SectionProps) {
       <SituationSection data={p.data} setField={p.setField} />
       <FamilySection data={p.data} updateArrayItem={p.updateArrayItem} addArrayItem={p.addArrayItem} removeArrayItem={p.removeArrayItem} />
       <Card title="Income">
-        <Field label="Annual income of family (₹)" value={p.data.annualIncome} onChange={(v) => p.setField("annualIncome", v)} required />
+        <Field label="Annual income of family (₹)" value={p.data.annualIncome} onChange={(v) => p.setField("annualIncome", v)} required hints={MONEY} />
       </Card>
       <Card title="Cause details">
         <TextArea label="Circumstances leading to the claim — explain the family situation and exact need for support" value={p.data.causeCircumstances} onChange={(v) => p.setField("causeCircumstances", v)} required rows={6} />
-        <Field label="Total amount of financial assistance required (₹)" value={p.data.totalAmount} onChange={(v) => p.setField("totalAmount", v)} required />
+        <Field label="Total amount of financial assistance required (₹)" value={p.data.totalAmount} onChange={(v) => p.setField("totalAmount", v)} required hints={MONEY} />
       </Card>
       <Card title="Background">
         <TextArea label="Have you previously received assistance from any other source? (If yes, state amount, when, and what for.)" value={p.data.prevAssistance} onChange={(v) => p.setField("prevAssistance", v)} rows={3} />
@@ -667,8 +755,8 @@ function OrganizationalSections(p: SectionProps) {
   return (
     <>
       <Card title="Organization details">
-        <Field label="Organization full name" value={p.data.organization?.fullName} onChange={(v) => p.setSection("organization", { fullName: v })} required colSpan />
-        <Field label="Address" value={p.data.organization?.address} onChange={(v) => p.setSection("organization", { address: v })} required colSpan />
+        <Field label="Organization full name" value={p.data.organization?.fullName} onChange={(v) => p.setSection("organization", { fullName: v })} required colSpan hints={{ autoComplete: "organization" }} />
+        <Field label="Address" value={p.data.organization?.address} onChange={(v) => p.setSection("organization", { address: v })} required colSpan hints={{ autoComplete: "street-address" }} />
         <div className="grid sm:grid-cols-2 gap-4">
           <Field label="Phone" value={p.data.organization?.phone} onChange={(v) => p.setSection("organization", { phone: v })} type="tel" required />
           <Field label="Email" value={p.data.organization?.email} onChange={(v) => p.setSection("organization", { email: v })} type="email" />
@@ -681,22 +769,22 @@ function OrganizationalSections(p: SectionProps) {
       <Card title="Funding request">
         <TextArea label="Purpose of funding request (include who will benefit and how)" value={p.data.fundingPurpose} onChange={(v) => p.setField("fundingPurpose", v)} required rows={6} />
         <p className="text-xs text-muted">Itemise the funding request below.</p>
-        <div className="space-y-2">
+        <div className="space-y-3">
           {items.map((it: Record<string, string>, i: number) => (
-            <div key={i} className="grid grid-cols-12 gap-2 items-end">
-              <div className="col-span-6"><Field label={i === 0 ? "Item" : ""} value={it.itemName} onChange={(v) => p.updateArrayItem("fundingItems", i, { itemName: v })} /></div>
-              <div className="col-span-2"><Field label={i === 0 ? "Nos" : ""} value={it.nos} onChange={(v) => p.updateArrayItem("fundingItems", i, { nos: v })} /></div>
-              <div className="col-span-3"><Field label={i === 0 ? "Cost (₹)" : ""} value={it.cost} onChange={(v) => p.updateArrayItem("fundingItems", i, { cost: v })} /></div>
-              <div className="col-span-1">
-                {items.length > 1 && (
-                  <button type="button" onClick={() => p.removeArrayItem("fundingItems", i)} className="w-full text-xs text-muted hover:text-accent-700 py-2">×</button>
-                )}
+            <div key={i} className="rounded-lg border border-[var(--color-line)] p-3 space-y-3 bg-[var(--color-soft)]/50">
+              <Field label={`Item ${i + 1}`} value={it.itemName} onChange={(v) => p.updateArrayItem("fundingItems", i, { itemName: v })} />
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="Nos" value={it.nos} onChange={(v) => p.updateArrayItem("fundingItems", i, { nos: v })} hints={NUMBER} />
+                <Field label="Cost (₹)" value={it.cost} onChange={(v) => p.updateArrayItem("fundingItems", i, { cost: v })} hints={MONEY} />
               </div>
+              {items.length > 1 && (
+                <button type="button" onClick={() => p.removeArrayItem("fundingItems", i)} className={removeBtnCls}>Remove this item</button>
+              )}
             </div>
           ))}
         </div>
-        <button type="button" onClick={() => p.addArrayItem("fundingItems", { itemName: "", nos: "", cost: "" })} className="text-sm font-semibold text-accent-600 hover:text-accent-700">+ Add item</button>
-        <Field label="Total amount of financial assistance required (₹)" value={p.data.totalAmount} onChange={(v) => p.setField("totalAmount", v)} required />
+        <button type="button" onClick={() => p.addArrayItem("fundingItems", { itemName: "", nos: "", cost: "" })} className={addBtnCls}>+ Add item</button>
+        <Field label="Total amount of financial assistance required (₹)" value={p.data.totalAmount} onChange={(v) => p.setField("totalAmount", v)} required hints={MONEY} />
       </Card>
     </>
   );
@@ -718,7 +806,7 @@ function FamilySection({
             <Field label="Relationship" value={row.relationship} onChange={(v) => updateArrayItem("family", i, { relationship: v })} />
           </div>
           <div className="grid sm:grid-cols-2 gap-3">
-            <Field label="Age" value={row.age} onChange={(v) => updateArrayItem("family", i, { age: v })} />
+            <Field label="Age" value={row.age} onChange={(v) => updateArrayItem("family", i, { age: v })} hints={NUMBER} />
             <Select label="Sex" value={row.sex ?? ""} onChange={(v) => updateArrayItem("family", i, { sex: v })} options={[["MALE","Male"],["FEMALE","Female"]]} />
           </div>
           <div className="grid sm:grid-cols-2 gap-3">
@@ -726,11 +814,11 @@ function FamilySection({
             <Field label="Contact (mobile)" value={row.contactNumber} onChange={(v) => updateArrayItem("family", i, { contactNumber: v })} type="tel" />
           </div>
           {family.length > 1 && (
-            <button type="button" onClick={() => removeArrayItem("family", i)} className="text-xs font-semibold text-muted hover:text-accent-700">Remove this member</button>
+            <button type="button" onClick={() => removeArrayItem("family", i)} className={removeBtnCls}>Remove this member</button>
           )}
         </div>
       ))}
-      <button type="button" onClick={() => addArrayItem("family", { name: "", relationship: "", age: "", sex: "", occupation: "", contactNumber: "" })} className="text-sm font-semibold text-accent-600 hover:text-accent-700">+ Add member</button>
+      <button type="button" onClick={() => addArrayItem("family", { name: "", relationship: "", age: "", sex: "", occupation: "", contactNumber: "" })} className={addBtnCls}>+ Add member</button>
     </Card>
   );
 }
@@ -743,7 +831,7 @@ function ReferenceSection({ data, setSection }: { data: any; setSection: Section
   return (
     <Card title="Reference">
       <p className="text-xs text-muted -mt-2">A reference is required in support of your application. The reference letter should be uploaded as an attachment or emailed separately.</p>
-      <Field label="Name" value={r.name} onChange={(v) => setSection("reference", { name: v })} required />
+      <Field label="Name" value={r.name} onChange={(v) => setSection("reference", { name: v })} required hints={OFF} />
       <Field label="Address" value={r.address} onChange={(v) => setSection("reference", { address: v })} required />
       <div className="grid sm:grid-cols-2 gap-4">
         <Field label="Phone" value={r.phone} onChange={(v) => setSection("reference", { phone: v })} type="tel" required />
@@ -770,11 +858,11 @@ function BankDetailsSection({ data, setSection, formType }: { data: any; setSect
     <Card title="Bank account details">
       <p className="text-xs text-muted -mt-2">These details will be used to disburse the funds once the fundraising is completed. The account should be in the name of {accountHolder[formType]}.</p>
       <div className="grid sm:grid-cols-2 gap-4">
-        <Field label="A/C number" value={b.accountNumber} onChange={(v) => setSection("bankDetails", { accountNumber: v })} required />
+        <Field label="A/C number" value={b.accountNumber} onChange={(v) => setSection("bankDetails", { accountNumber: v })} required hints={NUMBER} />
         <Field label="Account holder name" value={b.accountHolderName} onChange={(v) => setSection("bankDetails", { accountHolderName: v })} required />
         <Field label="Bank name" value={b.bankName} onChange={(v) => setSection("bankDetails", { bankName: v })} required />
         <Field label="Branch" value={b.branch} onChange={(v) => setSection("bankDetails", { branch: v })} required />
-        <Field label="IFSC code" value={b.ifsc} onChange={(v) => setSection("bankDetails", { ifsc: v })} required />
+        <Field label="IFSC code" value={b.ifsc} onChange={(v) => setSection("bankDetails", { ifsc: v.toUpperCase() })} required hints={{ autoCapitalize: "characters", autoComplete: "off", maxLength: 11 }} placeholder="e.g. SBIN0001234" />
         <Field label="If account is not in applicant's name, specify relationship" value={b.relationshipIfNotApplicant} onChange={(v) => setSection("bankDetails", { relationshipIfNotApplicant: v })} />
       </div>
     </Card>
@@ -793,7 +881,7 @@ function SituationSection({ data, setField }: { data: any; setField: SectionProp
           value={data.situation ?? ""}
           onChange={(e) => setField("situation", e.target.value)}
           required
-          rows={10}
+          rows={8}
           placeholder="Describe family, income, specific event leading to help request etc."
           className={`${inputCls} mt-1 resize-y`}
         />
@@ -821,7 +909,7 @@ function AttachmentsSection({
   return (
     <Card title="Attachments">
       <p className="text-xs text-muted -mt-2">
-        Each file must be <strong className="text-ink">2 MB or smaller</strong> — PDF, JPG or PNG. Files upload as soon as you pick them. Fields marked <span className="text-accent-600">*</span> are required.
+        Each file must be <strong className="text-ink">2 MB or smaller</strong> — PDF, JPG or PNG. You can take a photo with your phone camera. Files upload as soon as you pick them. Fields marked <span className="text-accent-600">*</span> are required.
       </p>
       {slots.map((slot) => (
         <FileSlot
@@ -849,7 +937,7 @@ function AttachmentsSection({
         <button
           type="button"
           onClick={() => setOtherCount((n) => Math.min(OTHER_FIELDS.length, n + 1))}
-          className="text-sm font-semibold text-accent-600 hover:text-accent-700"
+          className={addBtnCls}
         >
           + Add another document
         </button>
@@ -869,6 +957,7 @@ function FileSlot({
   onPick: (file: File | null) => void;
   onRemove: () => void;
 }) {
+  const accept = imagesOnly ? IMAGE_TYPES.join(",") : DOC_TYPES.join(",");
   return (
     <div className="rounded-lg border border-[var(--color-line)] p-3">
       <Label>
@@ -878,37 +967,48 @@ function FileSlot({
       {help && <p className="text-xs text-muted mt-0.5">{help}</p>}
 
       {state?.status === "done" ? (
-        <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
-          <span className="text-green-700 font-semibold">✓ Uploaded</span>
-          {state.url ? (
-            <a href={state.url} target="_blank" rel="noopener" className="text-ink underline underline-offset-2 break-all">{state.filename}</a>
-          ) : (
-            <span className="text-ink break-all">{state.filename}</span>
-          )}
-          <label className="text-xs font-semibold text-accent-600 hover:text-accent-700 cursor-pointer">
-            Replace
-            <input
-              type="file"
-              accept={imagesOnly ? IMAGE_TYPES.join(",") : DOC_TYPES.join(",")}
-              onChange={(e) => { onPick(e.target.files?.[0] ?? null); e.target.value = ""; }}
-              className="sr-only"
-            />
-          </label>
-          {!required && (
-            <button type="button" onClick={onRemove} className="text-xs font-semibold text-muted hover:text-accent-700">Remove</button>
-          )}
+        <div className="mt-2 text-sm">
+          <div className="flex items-start gap-2">
+            <span className="text-green-700 font-semibold shrink-0">✓ Uploaded</span>
+            {state.url ? (
+              <a href={state.url} target="_blank" rel="noopener" className="text-ink underline underline-offset-2 break-all min-w-0">{state.filename}</a>
+            ) : (
+              <span className="text-ink break-all min-w-0">{state.filename}</span>
+            )}
+          </div>
+          <div className="mt-2 flex gap-2">
+            <label className="flex-1 sm:flex-none text-center rounded-lg border border-[var(--color-line)] px-4 py-2.5 sm:py-1.5 text-sm sm:text-xs font-semibold text-accent-600 hover:border-accent-600 cursor-pointer">
+              Replace
+              <input
+                type="file"
+                accept={accept}
+                onChange={(e) => { onPick(e.target.files?.[0] ?? null); e.target.value = ""; }}
+                className="sr-only"
+              />
+            </label>
+            {!required && (
+              <button type="button" onClick={onRemove} className="flex-1 sm:flex-none rounded-lg border border-[var(--color-line)] px-4 py-2.5 sm:py-1.5 text-sm sm:text-xs font-semibold text-muted hover:text-accent-700">Remove</button>
+            )}
+          </div>
         </div>
       ) : state?.status === "uploading" ? (
         <p className="mt-2 text-sm text-muted inline-flex items-center gap-2"><Spinner /> Uploading {state.filename}…</p>
       ) : (
         <>
-          <input
-            type="file"
-            accept={imagesOnly ? IMAGE_TYPES.join(",") : DOC_TYPES.join(",")}
-            onChange={(e) => { onPick(e.target.files?.[0] ?? null); e.target.value = ""; }}
-            className="block mt-2 text-sm text-ink file:mr-3 file:rounded-md file:border file:border-[var(--color-line)] file:bg-[var(--color-soft)] file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-ink hover:file:border-ink"
-          />
-          {state?.status === "error" && <p className="text-xs text-accent-700 mt-1">{state.error}</p>}
+          {/* On phones this opens the camera / gallery / files chooser. */}
+          <label className="mt-2 flex w-full sm:w-auto sm:inline-flex items-center justify-center gap-2 rounded-lg border-2 border-dashed border-[var(--color-line)] hover:border-accent-600 bg-[var(--color-soft)]/60 px-4 py-4 sm:py-2.5 text-sm font-semibold text-ink cursor-pointer">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+            </svg>
+            {imagesOnly ? "Take a photo or choose image" : "Take a photo or choose file"}
+            <input
+              type="file"
+              accept={accept}
+              onChange={(e) => { onPick(e.target.files?.[0] ?? null); e.target.value = ""; }}
+              className="sr-only"
+            />
+          </label>
+          {state?.status === "error" && <p className="text-sm text-accent-700 mt-2">{state.error}</p>}
         </>
       )}
     </div>
@@ -930,7 +1030,7 @@ function AcknowledgementSection({ data, setSection }: { data: any; setSection: S
       <p className="text-xs text-muted -mt-2">
         Please read the {terms} before submitting. By submitting, you acknowledge that the information provided is true and that you accept them.
       </p>
-      <Field label="Full legal name (electronic signature)" value={a.fullLegalName} onChange={(v) => setSection("acknowledgement", { fullLegalName: v })} required colSpan />
+      <Field label="Full legal name (electronic signature)" value={a.fullLegalName} onChange={(v) => setSection("acknowledgement", { fullLegalName: v })} required colSpan hints={{ autoComplete: "name" }} />
       <div className="grid sm:grid-cols-2 gap-4">
         <Field label="Date" value={a.date} onChange={(v) => setSection("acknowledgement", { date: v })} type="date" required />
         <Field label="Place" value={a.place} onChange={(v) => setSection("acknowledgement", { place: v })} required />
@@ -941,7 +1041,7 @@ function AcknowledgementSection({ data, setSection }: { data: any; setSection: S
           checked={a.termsAccepted ?? false}
           onChange={(e) => setSection("acknowledgement", { termsAccepted: e.target.checked })}
           required
-          className="mt-1 accent-accent-600"
+          className="mt-0.5 h-5 w-5 shrink-0 accent-accent-600 scroll-mt-28"
         />
         <span className="text-sm text-ink leading-relaxed">
           I confirm that the information I have provided is true and accurate to the best of my knowledge, and I have read and accept the {terms}.
