@@ -1,10 +1,13 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
 import type { ApplicationStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/session";
 import { audit } from "@/lib/audit";
+import type { AttachmentMeta } from "@/lib/applications";
+import { deleteAttachments } from "@/lib/application-attachments";
 
 async function requireUser() {
   const u = await getCurrentUser();
@@ -58,6 +61,30 @@ export async function saveApplicationNotesAction(formData: FormData) {
     payload: { changed: true },
   });
   revalidatePath(`/admin/forms/${id}`);
+}
+
+/** Permanently delete an application and its uploaded files. ADMIN role only. */
+export async function deleteApplicationAction(formData: FormData) {
+  const me = await requireUser();
+  if (me.role !== "ADMIN") throw new Error("Only admins can delete applications.");
+  const id = String(formData.get("id"));
+  const app = await prisma.causeApplication.findUnique({
+    where: { id },
+    select: { applicationNo: true, fullName: true, formType: true, status: true, attachmentMeta: true },
+  });
+  if (!app) redirect("/admin/forms");
+
+  await prisma.causeApplication.delete({ where: { id } });
+  await deleteAttachments((app.attachmentMeta as AttachmentMeta[] | null) ?? []);
+  await audit({
+    action: "application.delete",
+    userId: me.userId,
+    entityType: "CauseApplication",
+    entityId: id,
+    payload: { applicationNo: app.applicationNo, fullName: app.fullName, formType: app.formType, status: app.status },
+  });
+  revalidatePath("/admin/forms");
+  redirect(`/admin/forms?deleted=${encodeURIComponent(app.applicationNo)}`);
 }
 
 // Same safety pattern used in app/admin/causes/actions.ts: avoid FK violations from

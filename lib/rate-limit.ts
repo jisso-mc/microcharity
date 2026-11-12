@@ -73,5 +73,7 @@ export const LIMITS = {
   contact:         { route: "contact",        windowMs: 60_000,    max: 3 },
   referCause:      { route: "refer-cause",    windowMs: 60_000,    max: 3 },
   causeApplication:{ route: "cause-app",      windowMs: 3_600_000, max: 5 },    // 5 / hr / IP
+  applicationEdit: { route: "cause-app-edit", windowMs: 3_600_000, max: 20 },   // applicant edit-link saves
+  applicationUpload:{ route: "cause-app-upload", windowMs: 3_600_000, max: 60 }, // Blob upload tokens (≤2 MB each)
   acceptInvite:    { route: "accept-invite",  windowMs: 60_000,    max: 5 },
 } as const satisfies Record<string, RateLimitConfig>;

@@ -1,12 +1,25 @@
-// Cause-application form types, validation, and helpers.
+// Cause-application form types, validation, and helpers (server-side).
 //
 // Four form types map to distinct payload shapes (see `*Data` types below).
-// All shapes also carry the same identity / reference / bank / acknowledgement blocks.
-// Files (photo, doctor's certificate, NGO declaration, reference letter) are NEVER
-// stored — they're forwarded once to info@microcharity.com and only their metadata
-// (filename, size, mime, slot) lands in the DB.
+// All shapes also carry the same identity / situation / reference / bank /
+// acknowledgement blocks.
+//
+// Attachments are uploaded by the browser straight to Vercel Blob (see
+// /api/cause-applications/upload) and the submission carries only their URLs.
+// verifyAttachments() re-checks every new URL against Blob (path, size, type)
+// before it is stored in `attachmentMeta`. Slot definitions + labels are in
+// lib/application-fields.ts (client-safe).
+//
+// Applicant edit links are HMAC-signed tokens over the application id — see
+// makeApplicationEditToken().
 
+import crypto from "node:crypto";
+import { head } from "@vercel/blob";
 import type { Prisma, ApplicationFormType } from "@prisma/client";
+import {
+  attachmentSlots, attachmentLabel, OTHER_FIELDS, ATTACHMENT_MAX_BYTES, IMAGE_TYPES, DOC_TYPES,
+  type AttachmentField,
+} from "./application-fields";
 
 export const FORM_TYPE_LABEL: Record<ApplicationFormType, string> = {
   EDUCATIONAL:    "Educational",
@@ -138,12 +151,12 @@ export type Acknowledgement = {
 };
 
 export type AttachmentMeta = {
-  field: "photo" | "medicalCertificate" | "referenceLetter" | "ngoDeclaration";
+  field: AttachmentField;
   filename: string;
   size: number;
   mimeType: string;
-  // Populated after the file is uploaded to Vercel Blob. Old rows (pre-Blob
-  // integration) won't have this — admin UI handles the absence gracefully.
+  // Vercel Blob URL. Very old rows (pre-Blob integration) won't have one — those
+  // files only exist in the admin notification email.
   url?: string;
 };
 
@@ -151,6 +164,7 @@ export type AttachmentMeta = {
 
 export type EducationalData = {
   applicant: IndividualApplicant;
+  situation: string;
   father: Parent;
   mother: Parent;
   course: { title: string; school: string };
@@ -166,6 +180,7 @@ export type EducationalData = {
 
 export type MedicalData = {
   applicant: IndividualApplicant;
+  situation: string;
   family: FamilyMember[];
   annualIncome: string;
   medicalCircumstances: string;
@@ -180,6 +195,7 @@ export type MedicalData = {
 
 export type IndividualData = {
   applicant: IndividualApplicant;
+  situation: string;
   family: FamilyMember[];
   annualIncome: string;
   causeCircumstances: string;
@@ -201,6 +217,7 @@ export type OrganizationalData = {
     contactPerson: string;
     contactMobile: string;
   };
+  situation: string;
   fundingPurpose: string;
   fundingItems: FundingItem[];
   totalAmount: string;
@@ -328,6 +345,7 @@ export function validateSubmission(
   let phone = "";
   let email: string | null = null;
   let result: object;
+  const situation = reqStr(r.situation, "Explain the situation leading to help request", errors);
 
   if (formType === "EDUCATIONAL") {
     const applicant = validateApplicant(r.applicant, errors);
@@ -380,7 +398,7 @@ export function validateSubmission(
     phone = applicant.phone;
     email = applicant.email ?? null;
     result = {
-      applicant, father, mother, course, educationHistory, fundingRequested, totalAmount,
+      applicant, situation, father, mother, course, educationHistory, fundingRequested, totalAmount,
       prevAssistance: optStr(r.prevAssistance), heardAbout: optStr(r.heardAbout),
       reference, bankDetails, acknowledgement,
     } satisfies EducationalData;
@@ -398,7 +416,7 @@ export function validateSubmission(
     phone = applicant.phone;
     email = applicant.email ?? null;
     result = {
-      applicant, family, annualIncome, medicalCircumstances, totalAmount,
+      applicant, situation, family, annualIncome, medicalCircumstances, totalAmount,
       prevAssistance: optStr(r.prevAssistance), heardAbout: optStr(r.heardAbout),
       reference, medicalOfficer, bankDetails, acknowledgement,
     } satisfies MedicalData;
@@ -416,7 +434,7 @@ export function validateSubmission(
     phone = applicant.phone;
     email = applicant.email ?? null;
     result = {
-      applicant, family, annualIncome, causeCircumstances, totalAmount,
+      applicant, situation, family, annualIncome, causeCircumstances, totalAmount,
       prevAssistance: optStr(r.prevAssistance), heardAbout: optStr(r.heardAbout),
       reference, ngoDeclarant, bankDetails, acknowledgement,
     } satisfies IndividualData;
@@ -453,7 +471,7 @@ export function validateSubmission(
     phone = organization.contactMobile;
     email = organization.email ?? null;
     result = {
-      organization, fundingPurpose, fundingItems, totalAmount,
+      organization, situation, fundingPurpose, fundingItems, totalAmount,
       reference, bankDetails, acknowledgement,
     } satisfies OrganizationalData;
   }
@@ -462,13 +480,100 @@ export function validateSubmission(
   return { ok: true, data: result, fullName, phone, email };
 }
 
-// ---------- File-upload guards ----------
+// ---------- Attachments ----------
 
-export const ATTACHMENT_RULES = {
-  photo: { maxBytes: 5 * 1024 * 1024, accept: ["image/jpeg", "image/png", "image/webp"] },
-  medicalCertificate: { maxBytes: 8 * 1024 * 1024, accept: ["application/pdf", "image/jpeg", "image/png"] },
-  referenceLetter: { maxBytes: 8 * 1024 * 1024, accept: ["application/pdf", "image/jpeg", "image/png"] },
-  ngoDeclaration: { maxBytes: 8 * 1024 * 1024, accept: ["application/pdf", "image/jpeg", "image/png"] },
-} satisfies Record<AttachmentMeta["field"], { maxBytes: number; accept: string[] }>;
+export type AttachmentInput = { field: string; url: string; filename: string };
 
-export const ATTACHMENT_TOTAL_MAX = 20 * 1024 * 1024; // 20 MB combined ceiling
+const BLOB_HOST_RE = /\.public\.blob\.vercel-storage\.com$/;
+
+/**
+ * Validate the attachment list sent with a submission / applicant edit.
+ *
+ *  - only slots that exist for this form type (+ up to 3 "other" slots), each once
+ *  - URLs already on the stored application (`existing`) are trusted as-is, so an
+ *    applicant editing an older application isn't blocked by the new 2 MB cap
+ *  - every NEW URL is checked against Vercel Blob with head(): it must be one of our
+ *    blobs under applications/, at most 2 MB, of an allowed type — never trust the
+ *    client-reported size / type
+ *  - required slots must be present
+ */
+export async function verifyAttachments(
+  formType: ApplicationFormType,
+  raw: unknown,
+  existing: AttachmentMeta[] = [],
+): Promise<{ ok: true; meta: AttachmentMeta[] } | { ok: false; error: string }> {
+  const list = Array.isArray(raw) ? (raw as AttachmentInput[]) : [];
+  const slots = attachmentSlots(formType);
+  const allowed = new Set<string>([...slots.map((sl) => sl.field), ...OTHER_FIELDS]);
+  const existingByUrl = new Map(existing.filter((e) => e.url).map((e) => [e.url!, e]));
+  const seen = new Set<string>();
+  const out: AttachmentMeta[] = [];
+
+  for (const a of list) {
+    const field = String(a?.field ?? "");
+    const url = String(a?.url ?? "");
+    if (!allowed.has(field)) return { ok: false, error: `Unknown attachment slot: ${field}.` };
+    if (seen.has(field)) return { ok: false, error: `Duplicate attachment for ${attachmentLabel(formType, field)}.` };
+    seen.add(field);
+
+    const prev = existingByUrl.get(url);
+    if (prev) { out.push({ ...prev, field: field as AttachmentField }); continue; }
+
+    const label = attachmentLabel(formType, field);
+    let parsed: URL;
+    try { parsed = new URL(url); } catch { return { ok: false, error: `${label}: invalid upload.` }; }
+    if (parsed.protocol !== "https:" || !BLOB_HOST_RE.test(parsed.hostname) || !parsed.pathname.startsWith("/applications/")) {
+      return { ok: false, error: `${label}: invalid upload.` };
+    }
+    let info: Awaited<ReturnType<typeof head>>;
+    try { info = await head(url); } catch { return { ok: false, error: `${label}: upload not found — please upload it again.` }; }
+    const imagesOnly = slots.find((sl) => sl.field === field)?.imagesOnly;
+    if (info.size > ATTACHMENT_MAX_BYTES) return { ok: false, error: `${label} is larger than 2 MB.` };
+    if (!(imagesOnly ? IMAGE_TYPES : DOC_TYPES).includes(info.contentType)) {
+      return { ok: false, error: `${label}: file type ${info.contentType} is not allowed.` };
+    }
+    out.push({
+      field: field as AttachmentField,
+      filename: String(a.filename ?? "").slice(0, 200) || info.pathname.split("/").pop() || "file",
+      size: info.size,
+      mimeType: info.contentType,
+      url: info.url,
+    });
+  }
+
+  const missing = slots.filter((sl) => sl.required && !seen.has(sl.field)).map((sl) => sl.label);
+  if (missing.length) return { ok: false, error: `Please upload: ${missing.join("; ")}.` };
+  return { ok: true, meta: out };
+}
+
+// ---------- Applicant edit link ----------
+//
+// Token = "<applicationId>.<hmac>" signed with ADMIN_SESSION_SECRET (the same secret
+// the unsubscribe tokens use). Stateless — no schema column — and deleting the
+// application kills the link. Only SUBMITTED / UNDER_REVIEW applications accept edits.
+
+function editSecret(): string {
+  const s = process.env.ADMIN_SESSION_SECRET;
+  if (!s || s.length < 32) throw new Error("ADMIN_SESSION_SECRET must be set to a string of 32+ characters.");
+  return s;
+}
+
+function editSig(id: string): string {
+  return crypto.createHmac("sha256", editSecret()).update(`application-edit:${id}`).digest("base64url").slice(0, 32);
+}
+
+export function makeApplicationEditToken(id: string): string {
+  return `${id}.${editSig(id)}`;
+}
+
+/** Returns the application id for a valid token, else null. */
+export function verifyApplicationEditToken(token: string): string | null {
+  const [id, sig] = String(token).split(".");
+  if (!id || !sig || !/^[a-z0-9]+$/i.test(id)) return null;
+  const expected = Buffer.from(editSig(id));
+  const given = Buffer.from(sig);
+  if (expected.length !== given.length || !crypto.timingSafeEqual(expected, given)) return null;
+  return id;
+}
+
+export const APPLICANT_EDITABLE_STATUSES: ReadonlyArray<string> = ["SUBMITTED", "UNDER_REVIEW"];

@@ -9,7 +9,23 @@ export const metadata = {
   robots: { index: false, follow: false },
 };
 
-export default function CauseApplicationsPage() {
+// Type-specific links: /cause-applications?education | ?medical | ?individual | ?org
+// pre-select the application type and lock the dropdown. (A few aliases accepted.)
+const PRESETS: Record<string, "EDUCATIONAL" | "MEDICAL" | "INDIVIDUAL" | "ORGANIZATIONAL"> = {
+  education: "EDUCATIONAL", educational: "EDUCATIONAL",
+  medical: "MEDICAL",
+  individual: "INDIVIDUAL", individuals: "INDIVIDUAL",
+  org: "ORGANIZATIONAL", organization: "ORGANIZATIONAL", organisation: "ORGANIZATIONAL", organizational: "ORGANIZATIONAL",
+};
+
+export default async function CauseApplicationsPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const sp = await searchParams;
+  const presetType = Object.keys(sp).map((k) => PRESETS[k.toLowerCase()]).find(Boolean);
+
   return (
     <div className="min-h-screen bg-[var(--color-soft)]">
       <header className="bg-white border-b border-[var(--color-line)]">
@@ -23,7 +39,7 @@ export default function CauseApplicationsPage() {
         </div>
       </header>
       <main className="container-page py-8 max-w-3xl">
-        <ApplicationForm />
+        <ApplicationForm presetType={presetType} />
       </main>
     </div>
   );

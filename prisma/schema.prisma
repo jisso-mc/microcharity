@@ -292,9 +292,9 @@ model CauseApplication {
   // the column itself is opaque so we can evolve form templates without migrations.
   data          Json
 
-  // Filename + size + mime + which slot each attachment came from. The actual file
-  // bytes are NEVER persisted — they're forwarded once to info@microcharity.com via
-  // email and discarded. This is the metadata so admins know what was sent.
+  // [{ field, filename, size, mimeType, url }] — one entry per uploaded document.
+  // Files live on Vercel Blob (uploaded browser → Blob, ≤ 2 MB each); a copy is
+  // also emailed to info@microcharity.com on submission. See lib/applications.ts.
   attachmentMeta Json?
 
   adminNotes    String?             @db.Text

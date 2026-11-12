@@ -1,10 +1,15 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { headers } from "next/headers";
 import type { ApplicationStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/session";
-import { FORM_TYPE_LABEL } from "@/lib/applications";
-import { setApplicationStatusAction, saveApplicationNotesAction } from "./actions";
+import {
+  FORM_TYPE_LABEL, makeApplicationEditToken, APPLICANT_EDITABLE_STATUSES, type AttachmentMeta,
+} from "@/lib/applications";
+import { fieldLabel as lbl, sectionLabel, orderedSections, orderedFields, attachmentLabel } from "@/lib/application-fields";
+import { setApplicationStatusAction, saveApplicationNotesAction, deleteApplicationAction } from "./actions";
+import { PendingButton, CopyLinkButton, BackupPanel } from "./FormControls";
 
 export const metadata = { title: "Application — Admin" };
 export const dynamic = "force-dynamic";
@@ -16,41 +21,19 @@ const STATUS_LABEL: Record<ApplicationStatus, string> = {
   REJECTED: "Rejected",
 };
 
-const SECTION_LABELS: Record<string, string> = {
-  applicant: "Applicant", organization: "Organization",
-  father: "Father's details", mother: "Mother's details",
-  course: "Course",
-  educationHistory: "Education history",
-  fundingRequested: "Funding requested", fundingItems: "Funding items",
-  fundingPurpose: "Purpose of funding request",
-  family: "Family details",
-  annualIncome: "Annual income", medicalCircumstances: "Medical circumstances",
-  causeCircumstances: "Cause circumstances", totalAmount: "Total amount required",
-  prevAssistance: "Previously received assistance", heardAbout: "Where heard about charity",
-  reference: "Reference",
-  medicalOfficer: "Medical officer", ngoDeclarant: "NGO / committee declarant",
-  bankDetails: "Bank account details",
-  acknowledgement: "Acknowledgement (e-signature)",
+const STATUS_BADGE: Record<ApplicationStatus, string> = {
+  SUBMITTED:    "bg-blue-50 text-blue-700 border-blue-200",
+  UNDER_REVIEW: "bg-yellow-50 text-yellow-700 border-yellow-200",
+  APPROVED:     "bg-green-50 text-green-700 border-green-200",
+  REJECTED:     "bg-[var(--color-soft)] text-muted border-[var(--color-line)]",
 };
 
-const FIELD_LABELS: Record<string, string> = {
-  fullName: "Full name", address: "Address", phone: "Phone", mobile: "Mobile", email: "Email",
-  dateOfBirth: "Date of birth", age: "Age", sex: "Sex",
-  name: "Name", relationship: "Relationship", occupation: "Occupation",
-  contactNumber: "Contact number", contactPerson: "Contact person", contactMobile: "Contact person mobile",
-  knownSince: "Known applicant since", description: "Description",
-  designation: "Designation", organization: "Organization",
-  accountNumber: "A/C number", accountHolderName: "Account holder name", bankName: "Bank",
-  branch: "Branch", ifsc: "IFSC code", relationshipIfNotApplicant: "Relationship (if a/c not in applicant's name)",
-  title: "Course title", school: "School / Educational establishment",
-  fees: "Fees", uniform: "Uniform", books: "Books / stationaries", others: "Others",
-  itemName: "Item", nos: "Nos", cost: "Cost",
-  fromDate: "From", toDate: "To", achievements: "Achievements",
-  fullLegalName: "Full legal name", date: "Date", place: "Place",
-  termsAccepted: "T&Cs accepted",
-};
-
-function lbl(k: string) { return FIELD_LABELS[k] ?? k; }
+// Status changes available at any time, in either direction.
+const STATUS_ACTIONS: Array<{ status: ApplicationStatus; label: string; pending: string; cls: string }> = [
+  { status: "UNDER_REVIEW", label: "Under review", pending: "Saving…",    cls: "border-[var(--color-line)] text-ink hover:border-ink" },
+  { status: "APPROVED",     label: "Approve",      pending: "Approving…", cls: "border-green-600 bg-green-600 text-white hover:bg-green-700" },
+  { status: "REJECTED",     label: "Reject",       pending: "Rejecting…", cls: "border-accent-600 text-accent-700 hover:bg-accent-50" },
+];
 
 export default async function AdminFormDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -70,7 +53,14 @@ export default async function AdminFormDetailPage({ params }: { params: Promise<
     : Object.fromEntries(
         Object.entries(fullData).filter(([k]) => k !== "bankDetails")
       );
-  const attachments = (app.attachmentMeta as Array<{ field: string; filename: string; size: number; mimeType: string; url?: string }> | null) ?? [];
+  const attachments = (app.attachmentMeta as AttachmentMeta[] | null) ?? [];
+
+  // Applicant's personal edit link — absolute URL on whatever host the admin is using.
+  const h = await headers();
+  const host = h.get("x-forwarded-host") ?? h.get("host") ?? "www.microcharity.com";
+  const proto = h.get("x-forwarded-proto") ?? (host.startsWith("localhost") ? "http" : "https");
+  const editUrl = `${proto}://${host}/cause-applications/edit/${makeApplicationEditToken(app.id)}`;
+  const applicantCanEdit = APPLICANT_EDITABLE_STATUSES.includes(app.status);
 
   return (
     <div className="space-y-6 max-w-4xl">
@@ -81,25 +71,24 @@ export default async function AdminFormDetailPage({ params }: { params: Promise<
           <h1 className="font-display text-3xl text-ink">{FORM_TYPE_LABEL[app.formType]} application</h1>
           <p className="text-sm text-muted mt-1">
             <span className="font-mono">{app.applicationNo}</span> · Submitted {app.createdAt.toLocaleString("en-IN")}
+            {app.updatedAt.getTime() - app.createdAt.getTime() > 60_000 && <> · Last updated {app.updatedAt.toLocaleString("en-IN")}</>}
             {app.reviewedAt && app.reviewedBy && <> · Reviewed by {app.reviewedBy.name} on {app.reviewedAt.toLocaleDateString("en-IN")}</>}
           </p>
         </div>
-        <div className="flex flex-wrap gap-2">
-          {(["SUBMITTED","UNDER_REVIEW","APPROVED","REJECTED"] as ApplicationStatus[]).map((s) => (
-            <form key={s} action={setApplicationStatusAction} className="inline">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className={`text-[11px] uppercase tracking-wider font-semibold px-2.5 py-1.5 rounded border ${STATUS_BADGE[app.status]}`}>
+            {STATUS_LABEL[app.status]}
+          </span>
+          {STATUS_ACTIONS.filter((a) => a.status !== app.status).map((a) => (
+            <form key={a.status} action={setApplicationStatusAction}>
               <input type="hidden" name="id" value={app.id} />
-              <input type="hidden" name="status" value={s} />
-              <button
-                type="submit"
-                disabled={app.status === s}
-                className={`text-xs uppercase tracking-wider font-semibold px-3 py-1.5 rounded-full border transition ${
-                  app.status === s
-                    ? "bg-ink text-white border-ink"
-                    : "border-[var(--color-line)] text-muted hover:border-ink hover:text-ink"
-                }`}
+              <input type="hidden" name="status" value={a.status} />
+              <PendingButton
+                pendingLabel={a.pending}
+                className={`text-xs font-semibold px-3.5 py-1.5 rounded-full border transition disabled:opacity-60 ${a.cls}`}
               >
-                {STATUS_LABEL[s]}
-              </button>
+                {a.label}
+              </PendingButton>
             </form>
           ))}
         </div>
@@ -123,26 +112,58 @@ export default async function AdminFormDetailPage({ params }: { params: Promise<
         </div>
       </section>
 
-      {/* All form sections, rendered from the JSON payload. Read-only. */}
+      {/* Applicant edit link — lets the applicant reopen their own form to fix details
+          and upload missing documents. Works only while Submitted / Under review. */}
+      <section className="rounded-2xl bg-white border border-[var(--color-line)] p-6">
+        <h2 className="font-display text-lg text-ink mb-1">Applicant link</h2>
+        <p className="text-sm text-muted mb-3">
+          Share this link with the applicant to collect more details or documents. They&apos;ll see everything they already entered and can edit it and add attachments. You&apos;ll get an email when they save.
+        </p>
+        <CopyLinkButton url={editUrl} />
+        {!applicantCanEdit && (
+          <p className="text-xs text-accent-700 mt-2">
+            The link is currently closed because this application is {STATUS_LABEL[app.status].toLowerCase()}. Set it back to <strong>Under review</strong> to let the applicant edit again.
+          </p>
+        )}
+      </section>
+
+      {/* Backup PDF — after approval, ADMIN only (contains bank details). */}
+      {isAdmin && (
+        <section className="rounded-2xl bg-white border border-[var(--color-line)] p-6">
+          <h2 className="font-display text-lg text-ink mb-1">Backup PDF</h2>
+          {app.status === "APPROVED" ? (
+            <>
+              <p className="text-sm text-muted mb-3">
+                Generates one PDF with the full application followed by the uploaded documents, and emails it with the subject
+                <span className="text-ink"> “Application Form - {app.fullName} - {FORM_TYPE_LABEL[app.formType]} - date submitted”</span>.
+              </p>
+              <BackupPanel id={app.id} defaultEmail={me?.email ?? ""} />
+            </>
+          ) : (
+            <p className="text-sm text-muted">Available once the application is approved.</p>
+          )}
+        </section>
+      )}
+
+      {/* All form sections, rendered from the JSON payload in display order. Read-only. */}
       <div className="space-y-4">
-        {Object.entries(data).map(([key, value]) => (
+        {orderedSections(data).map(([key, value]) => (
           <DataSection key={key} sectionKey={key} value={value} />
         ))}
       </div>
 
-      {/* Attachments — stored on Vercel Blob; also forwarded to info@microcharity.com
-          on submission as a backup. Older rows (pre-Blob integration) have no url
-          on the meta — they live only in the admin email. */}
+      {/* Attachments — stored on Vercel Blob; a copy also goes to info@microcharity.com
+          on submission. Very old rows (pre-Blob) have no url and live only in that email. */}
       <section className="rounded-2xl bg-white border border-[var(--color-line)] p-6">
         <h2 className="font-display text-lg text-ink mb-3">Attachments</h2>
         {attachments.length === 0 ? (
-          <p className="text-sm text-muted">No attachments uploaded with this submission. The applicant may have emailed supporting documents separately to info@microcharity.com.</p>
+          <p className="text-sm text-muted">No attachments uploaded. Share the applicant link above to collect them.</p>
         ) : (
           <ul className="text-sm space-y-2">
             {attachments.map((a, i) => (
               <li key={i} className="text-ink flex items-baseline justify-between gap-3">
                 <span>
-                  <strong>{lbl(a.field)}:</strong> {a.filename}{" "}
+                  <strong>{attachmentLabel(app.formType, a.field)}:</strong> {a.filename}{" "}
                   <span className="text-xs text-muted">({(a.size / 1024).toFixed(0)} KB · {a.mimeType})</span>
                 </span>
                 {a.url ? (
@@ -176,17 +197,35 @@ export default async function AdminFormDetailPage({ params }: { params: Promise<
             placeholder="Notes for fellow admins. Not shown to the applicant."
             className="w-full rounded-lg border border-[var(--color-line)] focus:border-accent-600 focus:ring-2 focus:ring-accent-100 outline-none px-3 py-2 text-sm bg-white resize-y"
           />
-          <button type="submit" className="rounded-full bg-accent-600 hover:bg-accent-700 text-white text-sm font-semibold px-5 py-2 transition">
+          <PendingButton pendingLabel="Saving…" className="rounded-full bg-accent-600 hover:bg-accent-700 disabled:opacity-60 text-white text-sm font-semibold px-5 py-2 transition">
             Save notes
-          </button>
+          </PendingButton>
         </form>
       </section>
+
+      {/* Delete — ADMIN only, permanent (row + uploaded files). */}
+      {isAdmin && (
+        <section className="rounded-2xl bg-white border border-accent-200 p-6">
+          <h2 className="font-display text-lg text-ink mb-1">Delete application</h2>
+          <p className="text-sm text-muted mb-3">Permanently removes this application and its uploaded documents. This can&apos;t be undone.</p>
+          <form action={deleteApplicationAction}>
+            <input type="hidden" name="id" value={app.id} />
+            <PendingButton
+              pendingLabel="Deleting…"
+              confirm={`Permanently delete application ${app.applicationNo} (${app.fullName}) and its documents?`}
+              className="rounded-full border border-accent-600 text-accent-700 hover:bg-accent-50 disabled:opacity-60 text-sm font-semibold px-5 py-2 transition"
+            >
+              Delete application
+            </PendingButton>
+          </form>
+        </section>
+      )}
     </div>
   );
 }
 
 function DataSection({ sectionKey, value }: { sectionKey: string; value: unknown }) {
-  const title = SECTION_LABELS[sectionKey] ?? sectionKey;
+  const title = sectionLabel(sectionKey);
   return (
     <section className="rounded-2xl bg-white border border-[var(--color-line)] p-6">
       <h2 className="font-display text-lg text-ink mb-3">{title}</h2>
@@ -206,9 +245,9 @@ function RenderValue({ value }: { value: unknown }) {
   }
   if (Array.isArray(value)) {
     if (value.length === 0) return <p className="text-sm text-muted">No entries.</p>;
-    const cols = Array.from((value as Array<Record<string, unknown>>).reduce((s, r) => {
-      Object.keys(r ?? {}).forEach((k) => s.add(k)); return s;
-    }, new Set<string>()));
+    const cols = orderedFields(Object.fromEntries(
+      (value as Array<Record<string, unknown>>).flatMap((r) => Object.keys(r ?? {}).map((k) => [k, 1])),
+    )).map(([k]) => k);
     return (
       <div className="overflow-x-auto">
         <table className="w-full text-sm border border-[var(--color-line)] rounded-lg">
@@ -233,7 +272,7 @@ function RenderValue({ value }: { value: unknown }) {
   if (typeof value === "object") {
     return (
       <dl className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3 text-sm">
-        {Object.entries(value as Record<string, unknown>).map(([k, v]) => (
+        {orderedFields(value as Record<string, unknown>).map(([k, v]) => (
           <div key={k}>
             <dt className="text-xs uppercase tracking-wider text-muted">{lbl(k)}</dt>
             <dd className="text-ink mt-0.5 whitespace-pre-wrap leading-relaxed">

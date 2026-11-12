@@ -1,10 +1,34 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { upload } from "@vercel/blob/client";
+import {
+  attachmentSlots, OTHER_FIELDS, ATTACHMENT_MAX_BYTES, IMAGE_TYPES, DOC_TYPES,
+  type ApplicationType, type AttachmentField,
+} from "@/lib/application-fields";
 
+type FormType = ApplicationType;
 
-type FormType = "EDUCATIONAL" | "MEDICAL" | "INDIVIDUAL" | "ORGANIZATIONAL";
+// One uploaded (or uploading) attachment. Files go browser → Vercel Blob as soon as
+// they're picked; the submission only carries the resulting URLs.
+type FileState = {
+  status: "uploading" | "done" | "error";
+  url?: string;
+  filename?: string;
+  size?: number;
+  error?: string;
+};
+
+export type ExistingAttachment = { field: string; url?: string; filename: string; size: number };
+
+/** Props for edit mode — the applicant's personal link from /admin/forms/[id]. */
+export type EditModeProps = {
+  token: string;
+  applicationNo: string;
+  formType: FormType;
+  data: Record<string, unknown>;
+  attachments: ExistingAttachment[];
+};
 
 const FORM_LABELS: Record<FormType, string> = {
   EDUCATIONAL:    "Educational",
@@ -22,7 +46,11 @@ function todayISO() {
 }
 
 // Fresh empty payload per type. Helper prevents nested fields from being undefined.
-function emptyData(type: FormType) {
+function emptyData(type: FormType): Record<string, unknown> {
+  return { situation: "", ...emptyTypeData(type) };
+}
+
+function emptyTypeData(type: FormType) {
   const applicant = { fullName: "", address: "", phone: "", mobile: "", email: "", dateOfBirth: "", age: "", sex: "" };
   const reference = { name: "", address: "", phone: "", email: "", knownSince: "", description: "" };
   const bankDetails = { accountNumber: "", accountHolderName: "", bankName: "", branch: "", ifsc: "", relationshipIfNotApplicant: "" };
@@ -86,14 +114,25 @@ function emptyData(type: FormType) {
   };
 }
 
-export default function ApplicationForm() {
-  const router = useRouter();
-  const [formType, setFormType] = useState<FormType | "">("");
+export default function ApplicationForm({ edit, presetType }: { edit?: EditModeProps; presetType?: FormType } = {}) {
+  // presetType comes from a type-specific link (/cause-applications?education etc.) —
+  // the type is pre-selected and the dropdown locked.
+  const [formType, setFormType] = useState<FormType | "">(edit?.formType ?? presetType ?? "");
   // `any` here is pragmatic — the shape varies per formType and is validated server-side.
   // Keeping a typed union would balloon this component for negligible safety win.
+  // Edit mode starts from the blank template merged with what the applicant saved, so
+  // fields added since they applied (e.g. "situation") show up empty, not undefined.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const [data, setData] = useState<any>({});
-  const [files, setFiles] = useState<Record<string, File | null>>({});
+  const [data, setData] = useState<any>(
+    edit ? { ...emptyData(edit.formType), ...edit.data } : presetType ? emptyData(presetType) : {},
+  );
+  const [files, setFiles] = useState<Record<string, FileState>>(() =>
+    Object.fromEntries(
+      (edit?.attachments ?? [])
+        .filter((a) => a.url)
+        .map((a) => [a.field, { status: "done", url: a.url, filename: a.filename, size: a.size } satisfies FileState]),
+    ),
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<{ applicationNo: string } | null>(null);
@@ -140,9 +179,52 @@ export default function ApplicationForm() {
     });
   }
 
+  // Upload a picked file straight to Vercel Blob. Size / type are checked here for a
+  // fast error; the token route and the submit endpoint enforce the same limits.
+  async function pickFile(field: AttachmentField, file: File | null, imagesOnly?: boolean) {
+    if (!file) return;
+    const allowed = imagesOnly ? IMAGE_TYPES : DOC_TYPES;
+    if (file.size > ATTACHMENT_MAX_BYTES) {
+      setFiles((f) => ({ ...f, [field]: { status: "error", error: "File is larger than 2 MB. Please upload a smaller file." } }));
+      return;
+    }
+    if (file.type && !allowed.includes(file.type)) {
+      setFiles((f) => ({ ...f, [field]: { status: "error", error: imagesOnly ? "Please upload a JPG or PNG image." : "Please upload a PDF, JPG or PNG file." } }));
+      return;
+    }
+    setFiles((f) => ({ ...f, [field]: { status: "uploading", filename: file.name } }));
+    try {
+      const ext = (/\.[a-z0-9]{1,6}$/i.exec(file.name)?.[0] ?? "").toLowerCase();
+      const blob = await upload(`applications/uploads/${field}${ext}`, file, {
+        access: "public",
+        handleUploadUrl: "/api/cause-applications/upload",
+      });
+      setFiles((f) => ({ ...f, [field]: { status: "done", url: blob.url, filename: file.name, size: file.size } }));
+    } catch (err) {
+      setFiles((f) => ({ ...f, [field]: { status: "error", error: err instanceof Error ? err.message : "Upload failed. Please try again." } }));
+    }
+  }
+
+  function removeFile(field: string) {
+    setFiles((f) => {
+      const next = { ...f };
+      delete next[field];
+      return next;
+    });
+  }
+
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (!formType) { setError("Pick an application type."); return; }
+    if (Object.values(files).some((f) => f.status === "uploading")) {
+      setError("Please wait for the uploads to finish.");
+      return;
+    }
+    const missing = attachmentSlots(formType).filter((sl) => sl.required && files[sl.field]?.status !== "done");
+    if (missing.length) {
+      setError(`Please upload: ${missing.map((m) => m.label).join("; ")}.`);
+      return;
+    }
 
     // Read the honeypot value from the form before we serialise it — bots happily
     // fill every input they see; humans never touch this hidden field.
@@ -152,13 +234,20 @@ export default function ApplicationForm() {
     setBusy(true);
     setError(null);
     try {
-      const fd = new FormData();
-      fd.set("formType", formType);
-      fd.set("payload", JSON.stringify(data));
-      fd.set("website", honeypot);
-      fd.set("elapsedMs", String(elapsedMs));
-      for (const [k, f] of Object.entries(files)) if (f) fd.set(k, f);
-      const res = await fetch("/api/cause-applications", { method: "POST", body: fd });
+      const attachments = Object.entries(files)
+        .filter(([, f]) => f.status === "done" && f.url)
+        .map(([field, f]) => ({ field, url: f.url, filename: f.filename }));
+      const res = edit
+        ? await fetch(`/api/cause-applications/edit/${encodeURIComponent(edit.token)}`, {
+            method: "PUT",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ payload: data, attachments }),
+          })
+        : await fetch("/api/cause-applications", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ formType, payload: data, attachments, website: honeypot, elapsedMs }),
+          });
       const j = await res.json();
       if (!res.ok) throw new Error(j.error ?? "Could not submit.");
       setDone({ applicationNo: j.applicationNo });
@@ -171,6 +260,29 @@ export default function ApplicationForm() {
     }
   }
 
+  if (done && edit) {
+    return (
+      <div className="rounded-2xl bg-white border border-[var(--color-line)] p-6 md:p-8">
+        <div className="rounded-lg bg-green-50 border border-green-200 p-4 mb-4">
+          <p className="font-display text-base text-green-800">Your changes have been saved — thank you.</p>
+        </div>
+        <p className="text-sm text-ink leading-relaxed mb-2">
+          Application number <strong className="font-mono">{done.applicationNo}</strong>. Our team has been notified.
+        </p>
+        <p className="text-sm text-muted leading-relaxed">
+          You can open this same link again to make further changes while your application is under review.
+        </p>
+        <button
+          type="button"
+          onClick={() => window.location.reload()}
+          className="mt-6 inline-flex items-center gap-2 rounded-full border border-[var(--color-line)] hover:border-ink text-ink font-semibold px-5 py-2 text-sm transition"
+        >
+          Back to my application
+        </button>
+      </div>
+    );
+  }
+
   if (done) {
     return (
       <div className="rounded-2xl bg-white border border-[var(--color-line)] p-6 md:p-8">
@@ -181,11 +293,11 @@ export default function ApplicationForm() {
           Your application number is <strong className="font-mono">{done.applicationNo}</strong>. Please quote this in any future correspondence.
         </p>
         <p className="text-sm text-muted leading-relaxed">
-          A copy has been emailed to you (if you provided an email address). Our team will review your application and contact you. If you haven&apos;t already, please email any supporting documents (photo, signed certificates, reference letter) to <a className="text-accent-600 hover:text-accent-700 font-semibold" href="mailto:info@microcharity.com">info@microcharity.com</a> referencing your application number.
+          A copy has been emailed to you (if you provided an email address). Our team will review your application and contact you. If we need more information or documents, we&apos;ll send you a link to update your application.
         </p>
         <button
           type="button"
-          onClick={() => router.refresh()}
+          onClick={() => window.location.reload()}
           className="mt-6 inline-flex items-center gap-2 rounded-full border border-[var(--color-line)] hover:border-ink text-ink font-semibold px-5 py-2 text-sm transition"
         >
           Submit another application
@@ -196,25 +308,43 @@ export default function ApplicationForm() {
 
   return (
     <form onSubmit={onSubmit} className="space-y-6">
-      {/* Type picker */}
+      {edit ? (
+        <section className="rounded-2xl bg-white border border-[var(--color-line)] p-6">
+          <p className="text-sm text-ink">
+            <strong>{FORM_LABELS[edit.formType]}</strong> application · <span className="font-mono">{edit.applicationNo}</span>
+          </p>
+          <p className="text-xs text-muted mt-2">
+            Review the details below, correct anything that has changed, and upload any missing documents. Click <strong>Save changes</strong> at the bottom when you&apos;re done.
+          </p>
+        </section>
+      ) : (
       <section className="rounded-2xl bg-white border border-[var(--color-line)] p-6">
         <Label>Application type *</Label>
         <select
           value={formType}
           onChange={(e) => handleTypeChange(e.target.value as FormType | "")}
-          required
-          className={`${inputCls} mt-1`}
+          required={!presetType}
+          disabled={!!presetType}
+          className={`${inputCls} mt-1 disabled:bg-[var(--color-soft)] disabled:text-ink disabled:cursor-not-allowed`}
         >
           <option value="">— select —</option>
           {(Object.keys(FORM_LABELS) as FormType[]).map((t) => (
             <option key={t} value={t}>{FORM_LABELS[t]}</option>
           ))}
         </select>
-        <p className="text-xs text-muted mt-2">
-          Educational: for individual students seeking school/college fee support. Medical: for patients.
-          Individuals: for any other personal need. Organizational: for institutions / NGOs.
-        </p>
+        {presetType ? (
+          <p className="text-xs text-muted mt-2">
+            This link is for {FORM_LABELS[presetType]} applications. Need a different type?{" "}
+            <a href="/cause-applications" className="font-semibold text-accent-600 hover:text-accent-700">Choose another application type</a>.
+          </p>
+        ) : (
+          <p className="text-xs text-muted mt-2">
+            Educational: for individual students seeking school/college fee support. Medical: for patients.
+            Individuals: for any other personal need. Organizational: for institutions / NGOs.
+          </p>
+        )}
       </section>
+      )}
 
       {formType === "EDUCATIONAL" && (
         <EducationalSections
@@ -260,8 +390,8 @@ export default function ApplicationForm() {
       {formType && (
         <>
           <ReferenceSection data={data} setSection={setSection} />
-          <BankDetailsSection data={data} setSection={setSection} />
-          <AttachmentsSection formType={formType} files={files} setFiles={setFiles} />
+          <BankDetailsSection data={data} setSection={setSection} formType={formType} />
+          <AttachmentsSection formType={formType} files={files} onPick={pickFile} onRemove={removeFile} />
           <AcknowledgementSection data={data} setSection={setSection} />
 
           {/*
@@ -283,9 +413,11 @@ export default function ApplicationForm() {
           <button
             type="submit"
             disabled={busy}
-            className="w-full inline-flex items-center justify-center gap-2 rounded-full bg-accent-600 hover:bg-accent-700 disabled:opacity-60 text-white font-semibold px-6 py-3 transition"
+            aria-busy={busy}
+            className="w-full inline-flex items-center justify-center gap-2 rounded-full bg-accent-600 hover:bg-accent-700 disabled:opacity-60 disabled:cursor-wait text-white font-semibold px-6 py-3 transition"
           >
-            {busy ? "Submitting…" : "Submit application"}
+            {busy && <Spinner />}
+            {busy ? (edit ? "Saving…" : "Submitting…") : (edit ? "Save changes" : "Submit application")}
           </button>
         </>
       )}
@@ -406,6 +538,7 @@ function EducationalSections(p: SectionProps) {
   return (
     <>
       <ApplicantSection data={p.data} setSection={p.setSection} />
+      <SituationSection data={p.data} setField={p.setField} />
 
       <Card title="Parental details">
         <h3 className="text-sm font-semibold text-muted">Father</h3>
@@ -467,6 +600,7 @@ function MedicalSections(p: SectionProps) {
   return (
     <>
       <ApplicantSection data={p.data} setSection={p.setSection} label="Patient details" />
+      <SituationSection data={p.data} setField={p.setField} />
       <FamilySection data={p.data} updateArrayItem={p.updateArrayItem} addArrayItem={p.addArrayItem} removeArrayItem={p.removeArrayItem} />
       <Card title="Income">
         <Field label="Annual income of family (₹)" value={p.data.annualIncome} onChange={(v) => p.setField("annualIncome", v)} required />
@@ -499,6 +633,7 @@ function IndividualSections(p: SectionProps) {
   return (
     <>
       <ApplicantSection data={p.data} setSection={p.setSection} />
+      <SituationSection data={p.data} setField={p.setField} />
       <FamilySection data={p.data} updateArrayItem={p.updateArrayItem} addArrayItem={p.addArrayItem} removeArrayItem={p.removeArrayItem} />
       <Card title="Income">
         <Field label="Annual income of family (₹)" value={p.data.annualIncome} onChange={(v) => p.setField("annualIncome", v)} required />
@@ -541,6 +676,7 @@ function OrganizationalSections(p: SectionProps) {
           <Field label="Contact person mobile" value={p.data.organization?.contactMobile} onChange={(v) => p.setSection("organization", { contactMobile: v })} type="tel" required />
         </div>
       </Card>
+      <SituationSection data={p.data} setField={p.setField} />
 
       <Card title="Funding request">
         <TextArea label="Purpose of funding request (include who will benefit and how)" value={p.data.fundingPurpose} onChange={(v) => p.setField("fundingPurpose", v)} required rows={6} />
@@ -622,11 +758,17 @@ function ReferenceSection({ data, setSection }: { data: any; setSection: Section
 // ----- Bank details (shared) -----
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function BankDetailsSection({ data, setSection }: { data: any; setSection: SectionProps["setSection"] }) {
+function BankDetailsSection({ data, setSection, formType }: { data: any; setSection: SectionProps["setSection"]; formType: FormType }) {
   const b = data.bankDetails ?? {};
+  const accountHolder: Record<FormType, string> = {
+    EDUCATIONAL:    "the college / school",
+    MEDICAL:        "the hospital / pharmacy / lab or any other medical establishment",
+    INDIVIDUAL:     "the applicant (or parent / guardian)",
+    ORGANIZATIONAL: "the organization",
+  };
   return (
     <Card title="Bank account details">
-      <p className="text-xs text-muted -mt-2">These details will be used to disburse the funds once the fundraising is completed. The account should be in the name of the applicant, parent/guardian, hospital, school, or organization (depending on the type).</p>
+      <p className="text-xs text-muted -mt-2">These details will be used to disburse the funds once the fundraising is completed. The account should be in the name of {accountHolder[formType]}.</p>
       <div className="grid sm:grid-cols-2 gap-4">
         <Field label="A/C number" value={b.accountNumber} onChange={(v) => setSection("bankDetails", { accountNumber: v })} required />
         <Field label="Account holder name" value={b.accountHolderName} onChange={(v) => setSection("bankDetails", { accountHolderName: v })} required />
@@ -639,42 +781,137 @@ function BankDetailsSection({ data, setSection }: { data: any; setSection: Secti
   );
 }
 
+// ----- Situation (all types, right after personal / organization details) -----
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function SituationSection({ data, setField }: { data: any; setField: SectionProps["setField"] }) {
+  return (
+    <Card title="Explain the situation leading to help request">
+      <div>
+        <Label>Explain the situation leading to help request<span className="text-accent-600"> *</span></Label>
+        <textarea
+          value={data.situation ?? ""}
+          onChange={(e) => setField("situation", e.target.value)}
+          required
+          rows={10}
+          placeholder="Describe family, income, specific event leading to help request etc."
+          className={`${inputCls} mt-1 resize-y`}
+        />
+      </div>
+    </Card>
+  );
+}
+
 // ----- Attachments -----
 
 function AttachmentsSection({
-  formType, files, setFiles,
-}: { formType: FormType; files: Record<string, File | null>; setFiles: (next: Record<string, File | null>) => void }) {
-  // Slot list per form type
-  const slots: Array<{ key: string; label: string; help: string; accept: string }> = [];
-  if (formType !== "ORGANIZATIONAL") {
-    slots.push({ key: "photo", label: "Photo", help: "Recent photograph of the applicant. JPG/PNG, up to 5 MB.", accept: "image/jpeg,image/png,image/webp" });
-  }
-  if (formType === "MEDICAL") {
-    slots.push({ key: "medicalCertificate", label: "Doctor's signed certificate (with seal)", help: "PDF or image, up to 8 MB.", accept: "application/pdf,image/jpeg,image/png" });
-  }
-  if (formType === "INDIVIDUAL") {
-    slots.push({ key: "ngoDeclaration", label: "Local NGO / committee declaration (optional)", help: "PDF or image, up to 8 MB.", accept: "application/pdf,image/jpeg,image/png" });
-  }
-  slots.push({ key: "referenceLetter", label: "Reference letter", help: "PDF or image, up to 8 MB.", accept: "application/pdf,image/jpeg,image/png" });
+  formType, files, onPick, onRemove,
+}: {
+  formType: FormType;
+  files: Record<string, FileState>;
+  onPick: (field: AttachmentField, file: File | null, imagesOnly?: boolean) => void;
+  onRemove: (field: string) => void;
+}) {
+  const slots = attachmentSlots(formType);
+  // "Any other supporting document": show at least one slot, plus any already filled,
+  // and let the + button reveal up to three in total.
+  const filledOthers = OTHER_FIELDS.filter((f) => files[f]).length;
+  const [otherCount, setOtherCount] = useState(Math.max(1, filledOthers));
 
   return (
     <Card title="Attachments">
       <p className="text-xs text-muted -mt-2">
-        Upload any supporting documents you have ready. Anything you can&apos;t upload here can be emailed to <strong className="text-ink">info@microcharity.com</strong> referencing your application number after submission. Combined upload size: 20 MB max.
+        Each file must be <strong className="text-ink">2 MB or smaller</strong> — PDF, JPG or PNG. Files upload as soon as you pick them. Fields marked <span className="text-accent-600">*</span> are required.
       </p>
       {slots.map((slot) => (
-        <div key={slot.key}>
-          <Label>{slot.label}</Label>
+        <FileSlot
+          key={slot.field}
+          label={slot.label}
+          help={slot.help}
+          required={slot.required}
+          imagesOnly={slot.imagesOnly}
+          state={files[slot.field]}
+          onPick={(f) => onPick(slot.field, f, slot.imagesOnly)}
+          onRemove={() => onRemove(slot.field)}
+        />
+      ))}
+      {OTHER_FIELDS.slice(0, otherCount).map((field, i) => (
+        <FileSlot
+          key={field}
+          label={`Any other supporting document${otherCount > 1 ? ` (${i + 1})` : ""}`}
+          required={false}
+          state={files[field]}
+          onPick={(f) => onPick(field, f)}
+          onRemove={() => onRemove(field)}
+        />
+      ))}
+      {otherCount < OTHER_FIELDS.length && (
+        <button
+          type="button"
+          onClick={() => setOtherCount((n) => Math.min(OTHER_FIELDS.length, n + 1))}
+          className="text-sm font-semibold text-accent-600 hover:text-accent-700"
+        >
+          + Add another document
+        </button>
+      )}
+    </Card>
+  );
+}
+
+function FileSlot({
+  label, help, required, imagesOnly, state, onPick, onRemove,
+}: {
+  label: string;
+  help?: string;
+  required: boolean;
+  imagesOnly?: boolean;
+  state?: FileState;
+  onPick: (file: File | null) => void;
+  onRemove: () => void;
+}) {
+  return (
+    <div className="rounded-lg border border-[var(--color-line)] p-3">
+      <Label>
+        {label}
+        {required ? <span className="text-accent-600"> *</span> : <span className="text-muted font-normal"> (optional)</span>}
+      </Label>
+      {help && <p className="text-xs text-muted mt-0.5">{help}</p>}
+
+      {state?.status === "done" ? (
+        <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
+          <span className="text-green-700 font-semibold">✓ Uploaded</span>
+          {state.url ? (
+            <a href={state.url} target="_blank" rel="noopener" className="text-ink underline underline-offset-2 break-all">{state.filename}</a>
+          ) : (
+            <span className="text-ink break-all">{state.filename}</span>
+          )}
+          <label className="text-xs font-semibold text-accent-600 hover:text-accent-700 cursor-pointer">
+            Replace
+            <input
+              type="file"
+              accept={imagesOnly ? IMAGE_TYPES.join(",") : DOC_TYPES.join(",")}
+              onChange={(e) => { onPick(e.target.files?.[0] ?? null); e.target.value = ""; }}
+              className="sr-only"
+            />
+          </label>
+          {!required && (
+            <button type="button" onClick={onRemove} className="text-xs font-semibold text-muted hover:text-accent-700">Remove</button>
+          )}
+        </div>
+      ) : state?.status === "uploading" ? (
+        <p className="mt-2 text-sm text-muted inline-flex items-center gap-2"><Spinner /> Uploading {state.filename}…</p>
+      ) : (
+        <>
           <input
             type="file"
-            accept={slot.accept}
-            onChange={(e) => setFiles({ ...files, [slot.key]: e.target.files?.[0] ?? null })}
-            className="block mt-1 text-sm text-ink file:mr-3 file:rounded-md file:border file:border-[var(--color-line)] file:bg-[var(--color-soft)] file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-ink hover:file:border-ink"
+            accept={imagesOnly ? IMAGE_TYPES.join(",") : DOC_TYPES.join(",")}
+            onChange={(e) => { onPick(e.target.files?.[0] ?? null); e.target.value = ""; }}
+            className="block mt-2 text-sm text-ink file:mr-3 file:rounded-md file:border file:border-[var(--color-line)] file:bg-[var(--color-soft)] file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-ink hover:file:border-ink"
           />
-          <p className="text-xs text-muted mt-1">{slot.help}</p>
-        </div>
-      ))}
-    </Card>
+          {state?.status === "error" && <p className="text-xs text-accent-700 mt-1">{state.error}</p>}
+        </>
+      )}
+    </div>
   );
 }
 
@@ -683,9 +920,16 @@ function AttachmentsSection({
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function AcknowledgementSection({ data, setSection }: { data: any; setSection: SectionProps["setSection"] }) {
   const a = data.acknowledgement ?? {};
+  const terms = (
+    <a href="/cause-applications/terms" target="_blank" rel="noopener" className="font-semibold text-accent-600 hover:text-accent-700 underline underline-offset-2">
+      MicroCharity Terms &amp; Conditions
+    </a>
+  );
   return (
     <Card title="Acknowledgement">
-      <p className="text-xs text-muted -mt-2">By submitting, you acknowledge that the information provided is true and that you accept MicroCharity&apos;s Terms and Conditions.</p>
+      <p className="text-xs text-muted -mt-2">
+        Please read the {terms} before submitting. By submitting, you acknowledge that the information provided is true and that you accept them.
+      </p>
       <Field label="Full legal name (electronic signature)" value={a.fullLegalName} onChange={(v) => setSection("acknowledgement", { fullLegalName: v })} required colSpan />
       <div className="grid sm:grid-cols-2 gap-4">
         <Field label="Date" value={a.date} onChange={(v) => setSection("acknowledgement", { date: v })} type="date" required />
@@ -700,9 +944,17 @@ function AcknowledgementSection({ data, setSection }: { data: any; setSection: S
           className="mt-1 accent-accent-600"
         />
         <span className="text-sm text-ink leading-relaxed">
-          I confirm that the information I have provided is true and accurate to the best of my knowledge, and I accept the MicroCharity Terms and Conditions.
+          I confirm that the information I have provided is true and accurate to the best of my knowledge, and I have read and accept the {terms}.
         </span>
       </label>
     </Card>
+  );
+}
+
+function Spinner() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" className="animate-spin" aria-hidden="true">
+      <path d="M21 12a9 9 0 1 1-6.2-8.55" />
+    </svg>
   );
 }

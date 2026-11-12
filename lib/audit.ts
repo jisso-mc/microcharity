@@ -33,6 +33,10 @@ export type AuditAction =
   // Cause applications
   | "application.status.change"
   | "application.notes.save"
+  | "application.update.applicant"   // applicant saved changes via their edit link
+  | "application.delete"
+  | "application.backup.download"
+  | "application.backup.email"
   // Launch announcements (bulk mailer)
   | "announcement.send.start"
   | "announcement.send.cancel"

@@ -6,7 +6,7 @@ import { FORM_TYPE_LABEL } from "@/lib/applications";
 export const metadata = { title: "Forms — Admin" };
 export const dynamic = "force-dynamic";
 
-type Search = { type?: string; status?: string; q?: string };
+type Search = { type?: string; status?: string; q?: string; deleted?: string };
 
 const STATUS_BADGE: Record<ApplicationStatus, string> = {
   SUBMITTED:    "bg-blue-50 text-blue-700 border-blue-200",
@@ -91,6 +91,12 @@ export default async function AdminFormsPage({ searchParams }: { searchParams: P
           </p>
         </div>
       </div>
+
+      {sp.deleted && (
+        <div className="rounded-lg bg-green-50 border border-green-200 px-4 py-3 text-sm text-green-800">
+          Application <span className="font-mono">{sp.deleted}</span> and its documents were deleted.
+        </div>
+      )}
 
       <div className="flex flex-wrap items-center gap-2">
         <div className="flex flex-wrap gap-2">

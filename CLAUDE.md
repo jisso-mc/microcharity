@@ -225,6 +225,25 @@ the admin dashboard's Total donations / Total raised cards) come from
 Call `revalidateSiteTotals()` after any approval so the public pages
 update immediately (they're otherwise ISR, 60s).
 
+### Cause applications (`/cause-applications`)
+
+Unlisted, noindex intake form (Educational / Medical / Individuals /
+Organizational). Submissions land in `/admin/forms`.
+
+- **Attachments** upload browser → Vercel Blob directly (`upload()` from
+  `@vercel/blob/client`, token route `/api/cause-applications/upload`), each
+  ≤ 2 MB. The submit only carries URLs; `verifyAttachments()` re-checks each
+  new one with `head()`. Slots per type, labels and display order live in
+  `lib/application-fields.ts` (client-safe) — edit there to add a document.
+- **Applicant edit link** — `/cause-applications/edit/<id>.<hmac>` (signed with
+  `ADMIN_SESSION_SECRET`, no DB column). Admin copies it from the form view;
+  the applicant can edit + add documents while status is Submitted / Under
+  review. Saves `PUT /api/cause-applications/edit/[token]` and email admin.
+- **Backup PDF** — `/api/admin/forms/[id]/pdf` (GET download, POST email),
+  ADMIN only, APPROVED only. Full form + uploaded PDFs/images merged in
+  (`lib/application-pdf.ts`).
+- **Applicant T&C** — `/cause-applications/terms` (from the paper form, pp. 5–7).
+
 ### Soft delete vs hard delete
 
 - **Donors**: soft delete (`deletedAt`). Excluded from admin list and from
